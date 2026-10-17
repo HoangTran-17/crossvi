@@ -470,8 +470,10 @@ TEST(SettingsJsonIntegration, MigratesLegacySleepChoicesToSeparateQuickResumeAnd
             CrossPointSettings::CUSTOM_STATS);
   EXPECT_EQ(CrossPointSettings::sleepScreenMode(CrossPointSettings::SLEEP_SCREEN_CUSTOM),
             CrossPointSettings::TRANSPARENT_CUSTOM);
-  EXPECT_EQ(CrossPointSettings::sleepScreenMode(CrossPointSettings::SLEEP_SCREEN_TRANSPARENT),
-            CrossPointSettings::TRANSPARENT_CUSTOM);
+  EXPECT_EQ(CrossPointSettings::sleepScreenSelection(CrossPointSettings::LUNAR_CALENDAR),
+            CrossPointSettings::SLEEP_SCREEN_LUNAR_CALENDAR);
+  EXPECT_EQ(CrossPointSettings::sleepScreenMode(CrossPointSettings::SLEEP_SCREEN_LUNAR_CALENDAR),
+            CrossPointSettings::LUNAR_CALENDAR);
 
   needsResave = false;
   ASSERT_TRUE(
@@ -482,6 +484,11 @@ TEST(SettingsJsonIntegration, MigratesLegacySleepChoicesToSeparateQuickResumeAnd
   ASSERT_TRUE(
       JsonSettingsIO::loadSettings(SETTINGS, R"({"statusBarChapterPageCount":1,"sleepScreen":8})", &needsResave));
   EXPECT_EQ(SETTINGS.sleepScreen, CrossPointSettings::COVER_STATS);
+
+  needsResave = false;
+  ASSERT_TRUE(
+      JsonSettingsIO::loadSettings(SETTINGS, R"({"statusBarChapterPageCount":1,"sleepScreen":11})", &needsResave));
+  EXPECT_EQ(SETTINGS.sleepScreen, CrossPointSettings::LUNAR_CALENDAR);
 
   ASSERT_TRUE(
       JsonSettingsIO::loadSettings(SETTINGS, R"({"statusBarChapterPageCount":1,"sleepScreen":9})", &needsResave));
@@ -494,7 +501,7 @@ TEST(SettingsJsonIntegration, MigratesLegacySleepChoicesToSeparateQuickResumeAnd
 
   needsResave = false;
   ASSERT_TRUE(
-      JsonSettingsIO::loadSettings(SETTINGS, R"({"statusBarChapterPageCount":1,"sleepScreen":11})", &needsResave));
+      JsonSettingsIO::loadSettings(SETTINGS, R"({"statusBarChapterPageCount":1,"sleepScreen":12})", &needsResave));
   EXPECT_EQ(SETTINGS.sleepScreen, CrossPointSettings::DARK);
   EXPECT_TRUE(needsResave);
 }

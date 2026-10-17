@@ -46,6 +46,7 @@ class CrossPointSettings {
     COVER_STATS = 8,
     CUSTOM_STATS = 9,
     TRANSPARENT_CUSTOM = 10,
+    LUNAR_CALENDAR = 11,
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_SELECTION {
@@ -56,10 +57,10 @@ class CrossPointSettings {
     SLEEP_SCREEN_READING_CALENDAR = 4,
     SLEEP_SCREEN_COVER_STATS = 5,
     SLEEP_SCREEN_CUSTOM_STATS = 6,
-    SLEEP_SCREEN_SELECTION_COUNT = 7,
-    // Legacy UI index accepted when older callers still pass the removed
-    // transparent-screen selection. It is no longer part of the visible list.
-    SLEEP_SCREEN_TRANSPARENT = 7,
+    // Reuses index 7 of the removed transparent-screen selection. Every caller
+    // bounds the index by the visible list size, so no stale 7 can arrive.
+    SLEEP_SCREEN_LUNAR_CALENDAR = 7,
+    SLEEP_SCREEN_SELECTION_COUNT
   };
   static constexpr uint8_t sleepScreenSelection(const uint8_t mode) {
     switch (mode) {
@@ -77,6 +78,8 @@ class CrossPointSettings {
         return SLEEP_SCREEN_COVER_STATS;
       case CUSTOM_STATS:
         return SLEEP_SCREEN_CUSTOM_STATS;
+      case LUNAR_CALENDAR:
+        return SLEEP_SCREEN_LUNAR_CALENDAR;
       case DARK:
       case LIGHT:
       case QUICK_RESUME:
@@ -100,8 +103,8 @@ class CrossPointSettings {
         return COVER_STATS;
       case SLEEP_SCREEN_CUSTOM_STATS:
         return CUSTOM_STATS;
-      case SLEEP_SCREEN_TRANSPARENT:
-        return TRANSPARENT_CUSTOM;
+      case SLEEP_SCREEN_LUNAR_CALENDAR:
+        return LUNAR_CALENDAR;
       case SLEEP_SCREEN_DEFAULT:
       default:
         return LIGHT;

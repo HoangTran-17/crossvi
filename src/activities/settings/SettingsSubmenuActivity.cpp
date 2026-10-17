@@ -38,7 +38,7 @@ SettingInfo sleepScreenSetting() {
   return SettingInfo::DynamicEnum(
       StrId::STR_SLEEP_SCREEN,
       {StrId::STR_DEFAULT_VALUE, StrId::STR_COVER, StrId::STR_CUSTOM, StrId::STR_NONE_OPT, StrId::STR_READING_STATS,
-       StrId::STR_COVER_WITH_STATS, StrId::STR_CUSTOM_WITH_STATS},
+       StrId::STR_COVER_WITH_STATS, StrId::STR_CUSTOM_WITH_STATS, StrId::STR_LUNAR_CALENDAR},
       [] { return CrossPointSettings::sleepScreenSelection(SETTINGS.sleepScreen); },
       [](const uint8_t value) { SETTINGS.sleepScreen = CrossPointSettings::sleepScreenMode(value); });
 }

@@ -7,8 +7,10 @@
 #include <GfxRenderer.h>
 #include <HalDisplay.h>
 #include <HalGPIO.h>
+#include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <LunarCalendar.h>
 #include <Txt.h>
 #include <Xtc.h>
 
@@ -18,6 +20,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <string>
@@ -160,6 +163,113 @@ void drawCalendarWeekdays(const GfxRenderer& renderer, const ReadingCalendarGrid
                       layout.weekdays.y, layout.cellSize, layout.weekdays.height};
     drawCenteredInRect(renderer, SMALL_FONT_ID, column, column.y, I18N.get(labels[index]), EpdFontFamily::BOLD);
   }
+}
+
+struct TextInk {
+  static constexpr int MAX_WIDTH = 96;
+  static constexpr int MAX_HEIGHT = 64;
+  std::array<uint8_t, MAX_WIDTH * MAX_HEIGHT / 8> bits{};
+  int width = 0;
+  int height = 0;
+};
+
+// The largest built-in face is 18 pt. Render it once at (x, y), copy the ink
+// out of the framebuffer and erase it, so it can be redrawn enlarged without
+// adding a display font to flash.
+TextInk captureTextInk(const GfxRenderer& renderer, const int fontId, const int x, const int y, const char* text) {
+  const int width = std::min(TextInk::MAX_WIDTH, renderer.getTextWidth(fontId, text, EpdFontFamily::BOLD) + 4);
+  const int height = std::min(TextInk::MAX_HEIGHT, renderer.getLineHeight(fontId));
+  renderer.drawText(fontId, x, y, text, true, EpdFontFamily::BOLD);
+  int minX = width, minY = height, maxX = -1, maxY = -1;
+  for (int py = 0; py < height; ++py) {
+    for (int px = 0; px < width; ++px) {
+      if (!renderer.isPixelBlack(x + px, y + py)) continue;
+      minX = std::min(minX, px);
+      maxX = std::max(maxX, px);
+      minY = std::min(minY, py);
+      maxY = std::max(maxY, py);
+    }
+  }
+  TextInk ink;
+  if (maxX >= 0) {
+    ink.width = maxX - minX + 1;
+    ink.height = maxY - minY + 1;
+    for (int py = 0; py < ink.height; ++py) {
+      for (int px = 0; px < ink.width; ++px) {
+        if (!renderer.isPixelBlack(x + minX + px, y + minY + py)) continue;
+        const int bit = py * TextInk::MAX_WIDTH + px;
+        ink.bits[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
+      }
+    }
+  }
+  renderer.fillRect(x, y, width, height, false);
+  return ink;
+}
+
+void drawTextInkScaled(const GfxRenderer& renderer, const TextInk& ink, const int x, const int y, const int scale) {
+  for (int py = 0; py < ink.height; ++py) {
+    for (int px = 0; px < ink.width; ++px) {
+      const int bit = py * TextInk::MAX_WIDTH + px;
+      if (ink.bits[bit / 8] & (1u << (bit % 8))) renderer.fillRect(x + px * scale, y + py * scale, scale, scale);
+    }
+  }
+}
+
+// A cell carries the solar day at the top and the lunar day at the bottom.
+int minLunarCellSize(const GfxRenderer& renderer) { return renderer.getLineHeight(SMALL_FONT_ID) * 2 + 10; }
+
+// Lunar days only advance by one inside a month, so the astronomical
+// conversion runs again only where a new lunar month may begin.
+void drawLunarDayNumbers(const GfxRenderer& renderer, const ReadingCalendarGridLayout& layout,
+                         const ReadingCalendarModel& model) {
+  if (layout.cellSize < minLunarCellSize(renderer)) return;
+  const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  lunar::DayInfo info{};
+  bool known = false;
+  for (size_t index = 0; index < ReadingCalendarGridLayout::CELL_COUNT; ++index) {
+    const ReadingCalendarCell cell = model.cellAt(index);
+    if (!cell.date.isValid()) {
+      known = false;
+      continue;
+    }
+    if (known && info.lunarDay < 29) {
+      ++info.lunarDay;
+    } else {
+      known = lunar::computeDay(cell.date.year, cell.date.month, cell.date.day, info);
+      if (!known) continue;
+    }
+    char label[8];
+    if (info.lunarDay == 1) {
+      snprintf(label, sizeof(label), "1/%u", static_cast<unsigned>(info.lunarMonth));
+    } else {
+      snprintf(label, sizeof(label), "%u", static_cast<unsigned>(info.lunarDay));
+    }
+    const ReadingHeatmapLevel level =
+        cell.exactDuration ? readingHeatmapLevel(cell.readingSeconds) : ReadingHeatmapLevel::None;
+    const bool blackText = level != ReadingHeatmapLevel::Minutes120 && level != ReadingHeatmapLevel::Minutes240;
+    const Rect box = layout.cell(index);
+    const int width = renderer.getTextWidth(SMALL_FONT_ID, label);
+    renderer.drawText(SMALL_FONT_ID, box.x + box.width - width - 4, box.y + box.height - lineHeight - 6, label,
+                      blackText);
+  }
+}
+
+// Draws the first candidate that fits `width`, trying each font in order;
+// the last candidate is truncated when nothing fits.
+void drawFittedLine(const GfxRenderer& renderer, const int x, const int y, const int width,
+                    std::initializer_list<const char*> candidates, std::initializer_list<int> fonts,
+                    const EpdFontFamily::Style style = EpdFontFamily::REGULAR) {
+  for (const char* text : candidates) {
+    for (const int fontId : fonts) {
+      if (renderer.getTextWidth(fontId, text, style) <= width) {
+        renderer.drawText(fontId, x, y, text, true, style);
+        return;
+      }
+    }
+  }
+  const int fontId = *(fonts.end() - 1);
+  const std::string shown = renderer.truncatedText(fontId, *(candidates.end() - 1), width, style);
+  renderer.drawText(fontId, x, y, shown.c_str(), true, style);
 }
 
 struct SleepBookSummary {
@@ -801,6 +911,8 @@ void SleepActivity::onEnter() {
       }
     case (CrossPointSettings::SLEEP_SCREEN_MODE::READING_CALENDAR):
       return renderReadingCalendarSleepScreen();
+    case (CrossPointSettings::SLEEP_SCREEN_MODE::LUNAR_CALENDAR):
+      return renderLunarCalendarSleepScreen();
     default:
       return renderDefaultSleepScreen();
   }
@@ -928,6 +1040,192 @@ void SleepActivity::renderReadingCalendarSleepScreen() {
 
   const int legendY = secondaryMetrics.y + secondaryMetrics.height + sectionGap;
   ReadingCalendarRenderer::drawLegend(renderer, Rect{grid.x, legendY, grid.width, legendHeight});
+
+  displayStrongSleepFrame();
+}
+
+// Lunar terms are Vietnamese by nature and the lunar library names are
+// Vietnamese only, so this screen's calendar text is not routed through I18N.
+void SleepActivity::renderLunarCalendarSleepScreen() {
+  ReadingStatsDateTime now{};
+  lunar::DayInfo day{};
+  if (!getCurrentLocalReadingStatsDateTime(now) ||
+      !lunar::computeDay(now.date.year, now.date.month, now.date.day, day)) {
+    LOG_ERR("SLP", "Lunar calendar unavailable: clock invalid");
+    return renderReadingCalendarSleepScreen();
+  }
+
+  GlobalReadingStats::LoadStatus globalStatus = GlobalReadingStats::LoadStatus::Missing;
+  GlobalReadingStats stats = GlobalReadingStats::load(&globalStatus);
+  const bool statsTrusted = GlobalReadingStats::isTrustedLoadStatus(globalStatus);
+  // Unreadable stats must not hide the calendar itself; show an empty heatmap.
+  if (!statsTrusted) stats = GlobalReadingStats{};
+  ReadingCalendarModel model(buildReadingCalendarSnapshot(stats, true, &now.date));
+  DailyReadingHistory dailyHistory;
+  const DailyReadingHistory::LoadStatus dailyStatus = DailyReadingHistory::load(dailyHistory);
+  const bool dailyHistoryUsable = dailyStatus == DailyReadingHistory::LoadStatus::Ok ||
+                                  dailyStatus == DailyReadingHistory::LoadStatus::Missing ||
+                                  dailyStatus == DailyReadingHistory::LoadStatus::RecoveredBackup ||
+                                  dailyStatus == DailyReadingHistory::LoadStatus::RecoveredTemp;
+  if (dailyHistoryUsable) {
+    if (model.snapshot().hasLatestDayReadingSeconds) {
+      dailyHistory.reconcileExactDay(model.snapshot().latestReadingDay, model.snapshot().latestDayReadingSeconds);
+    }
+    model.setDailyHistory(&dailyHistory);
+  }
+  const bool showReadingStats = statsTrusted && dailyHistoryUsable && model.isAvailable();
+  if (!showReadingStats) {
+    LOG_ERR("SLP", "Lunar calendar without reading stats: stats=%u daily=%u", static_cast<unsigned>(globalStatus),
+            static_cast<unsigned>(dailyStatus));
+  }
+
+  renderer.clearScreen();
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const Rect screen{0, 0, renderer.getScreenWidth(), renderer.getScreenHeight()};
+  const int side = std::max(18, metrics.contentSidePadding);
+  const Rect content{screen.x + side, screen.y + 16, std::max(1, screen.width - side * 2),
+                     std::max(1, screen.height - 32)};
+  const int right = content.x + content.width - 1;
+  const int bottom = content.y + content.height;
+  const int smallLine = renderer.getLineHeight(SMALL_FONT_ID);
+  const int ui10Line = renderer.getLineHeight(UI_10_FONT_ID);
+  const int ui12Line = renderer.getLineHeight(UI_12_FONT_ID);
+  constexpr int sectionGap = 10;
+
+  // Status bar: battery, weekday and solar date.
+  GUI.drawBatteryLeft(renderer, Rect{content.x, content.y, metrics.batteryWidth, metrics.batteryHeight},
+                      powerManager.getBatteryPercentage(),
+                      SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS);
+  char solarDate[40];
+  snprintf(solarDate, sizeof(solarDate), "%s - %02u/%02u/%04u", lunar::weekdayName(day.weekday),
+           static_cast<unsigned>(now.date.day), static_cast<unsigned>(now.date.month),
+           static_cast<unsigned>(now.date.year));
+  renderer.drawText(SMALL_FONT_ID, right + 1 - renderer.getTextWidth(SMALL_FONT_ID, solarDate, EpdFontFamily::BOLD),
+                    content.y, solarDate, true, EpdFontFamily::BOLD);
+  int y = content.y + std::max(smallLine, metrics.batteryHeight + 6) + 6;
+  renderer.drawLine(content.x, y, right, y);
+  y += sectionGap + 4;
+
+  // Date block: large solar day, month, lunar date and can chi.
+  char dayNumber[4];
+  snprintf(dayNumber, sizeof(dayNumber), "%u", static_cast<unsigned>(now.date.day));
+  constexpr int dayScale = 3;
+  const TextInk dayInk = captureTextInk(renderer, NOTOSERIF_18_FONT_ID, content.x, y, dayNumber);
+  const int dayWidth = dayInk.width * dayScale;
+  const int dayHeight = dayInk.height * dayScale;
+  char solarMonth[32];
+  snprintf(solarMonth, sizeof(solarMonth), "Tháng %u năm %u", static_cast<unsigned>(now.date.month),
+           static_cast<unsigned>(now.date.year));
+  char lunarDate[64];
+  snprintf(lunarDate, sizeof(lunarDate), "%u tháng %u%s năm %s", static_cast<unsigned>(day.lunarDay),
+           static_cast<unsigned>(day.lunarMonth), day.lunarLeap ? " nhuận" : "", day.yearCanChi.name);
+  char canChi[56];
+  snprintf(canChi, sizeof(canChi), "Ngày %s - Tháng %s", day.dayCanChi.name, day.monthCanChi.name);
+  const int textHeight = ui12Line * 2 + ui10Line + 8;
+  const int blockHeight = std::max(dayHeight, textHeight);
+  drawTextInkScaled(renderer, dayInk, content.x + 4, y + (blockHeight - dayHeight) / 2, dayScale);
+  const int textX = content.x + 4 + dayWidth + 20;
+  const int textWidth = std::max(1, right + 1 - textX);
+  int textY = y + (blockHeight - textHeight) / 2;
+  drawFittedLine(renderer, textX, textY, textWidth, {solarMonth}, {UI_12_FONT_ID, UI_10_FONT_ID});
+  textY += ui12Line + 4;
+  drawFittedLine(renderer, textX, textY, textWidth, {lunarDate}, {UI_12_FONT_ID, UI_10_FONT_ID, SMALL_FONT_ID},
+                 EpdFontFamily::BOLD);
+  textY += ui12Line + 4;
+  drawFittedLine(renderer, textX, textY, textWidth, {canChi}, {UI_10_FONT_ID, SMALL_FONT_ID});
+  y += blockHeight + sectionGap;
+  renderer.drawLine(content.x, y, right, y);
+  y += sectionGap;
+
+  // Day quality: hoàng/hắc đạo, trực, star and the current or next good hour.
+  const lunar::HourSlot hour = lunar::currentOrNextHoangDaoHour(day, now.hour);
+  const char* hourLabel = hour.current ? "Giờ tốt:" : "Giờ tốt tới:";
+  char hourText[40];
+  snprintf(hourText, sizeof(hourText), "%s %s %u-%uh", hourLabel, lunar::chiName(hour.chi),
+           static_cast<unsigned>(hour.startHour), static_cast<unsigned>((hour.startHour + 2) % 24));
+  const char* dayKind = day.hoangDao ? "Hoàng đạo" : "Hắc đạo";
+  char qualityFull[128];
+  snprintf(qualityFull, sizeof(qualityFull), "%s (%s) - Trực %s - Sao %s - %s", dayKind, lunar::deityName(day.deity),
+           lunar::trucName(day.truc), lunar::starName(day.star), hourText);
+  char qualityShort[112];
+  snprintf(qualityShort, sizeof(qualityShort), "%s - Trực %s - Sao %s - %s", dayKind, lunar::trucName(day.truc),
+           lunar::starName(day.star), hourText);
+  char qualityMinimal[96];
+  snprintf(qualityMinimal, sizeof(qualityMinimal), "%s - Trực %s - Sao %s - %s %s", dayKind, lunar::trucName(day.truc),
+           lunar::starName(day.star), hourLabel, lunar::chiName(hour.chi));
+  drawFittedLine(renderer, content.x, y, content.width, {qualityFull, qualityShort, qualityMinimal},
+                 {UI_10_FONT_ID, SMALL_FONT_ID});
+  y += ui10Line + sectionGap;
+
+  // Month grid; metric rows give way from the bottom before cells get too
+  // small to carry the lunar day numbers.
+  const int weekdayHeight = smallLine + 4;
+  const int legendHeight = smallLine;
+  const int metricRowHeight = ui10Line + smallLine + 16;
+  const ReadingCalendarGridLayout naturalGrid =
+      ReadingCalendarGridLayout::calculate(Rect{0, 0, content.width, content.height}, weekdayHeight);
+  int metricRows = showReadingStats ? 2 : 0;
+  ReadingCalendarGridLayout calendarLayout;
+  while (true) {
+    const int reserved =
+        (showReadingStats ? legendHeight + sectionGap : 0) + metricRows * (metricRowHeight + sectionGap);
+    const int calendarHeight =
+        std::min(weekdayHeight + naturalGrid.grid.height, std::max(0, bottom - y - sectionGap - reserved));
+    calendarLayout =
+        ReadingCalendarGridLayout::calculate(Rect{content.x, y, content.width, calendarHeight}, weekdayHeight);
+    if (metricRows == 0 || calendarLayout.cellSize >= minLunarCellSize(renderer)) break;
+    --metricRows;
+  }
+  drawCalendarWeekdays(renderer, calendarLayout);
+  const Rect grid = ReadingCalendarRenderer::drawGrid(renderer, calendarLayout.grid, model, false);
+  drawLunarDayNumbers(renderer, calendarLayout, model);
+  y = grid.y + grid.height + sectionGap;
+  if (showReadingStats) {
+    ReadingCalendarRenderer::drawLegend(renderer, Rect{grid.x, y, grid.width, legendHeight});
+    y += legendHeight + sectionGap;
+  }
+
+  // Reading metrics, the same values the reading-stats sleep screen shows.
+  const ReadingCalendarMonthSummary summary = model.monthSummary();
+  const auto metricRow = [&](const int count) {
+    const Rect row{content.x, y, content.width, metricRowHeight};
+    renderer.drawRoundedRect(row.x, row.y, row.width, row.height, 1, 6, true, true, true, true, true);
+    for (int index = 1; index < count; ++index) {
+      const int x = row.x + row.width * index / count;
+      renderer.drawLine(x, row.y + 5, x, row.y + row.height - 6);
+    }
+    y += metricRowHeight + sectionGap;
+    return row;
+  };
+  const auto metricCell = [](const Rect& row, const int index, const int count) {
+    const int x = row.x + row.width * index / count;
+    return Rect{x, row.y, row.x + row.width * (index + 1) / count - x, row.height};
+  };
+  // Long streak labels need the wider two-column row.
+  if (metricRows >= 1) {
+    const Rect row = metricRow(3);
+    char days[12];
+    snprintf(days, sizeof(days), "%u", static_cast<unsigned>(summary.readingDays));
+    char best[32] = "--";
+    if (summary.bestDayKnown) {
+      const std::string duration = ReadingCalendarRenderer::formatDuration(summary.bestDaySeconds);
+      snprintf(best, sizeof(best), "%s - %u", duration.c_str(), static_cast<unsigned>(summary.bestDayOfMonth));
+    }
+    drawCalendarMetric(renderer, metricCell(row, 0, 3),
+                       ReadingCalendarRenderer::formatDuration(summary.totalSeconds, summary.totalIsMinimum),
+                       StrId::STR_STATS_MONTH_TOTAL);
+    drawCalendarMetric(renderer, metricCell(row, 1, 3), days, StrId::STR_STATS_MONTH_DAYS);
+    drawCalendarMetric(renderer, metricCell(row, 2, 3), best, StrId::STR_STATS_BEST_DAY);
+  }
+  if (metricRows >= 2) {
+    const Rect row = metricRow(2);
+    char streak[12];
+    snprintf(streak, sizeof(streak), "%u", static_cast<unsigned>(model.snapshot().currentStreak));
+    char longest[12];
+    snprintf(longest, sizeof(longest), "%u", static_cast<unsigned>(summary.longestReadingStreak));
+    drawCalendarMetric(renderer, metricCell(row, 0, 2), streak, StrId::STR_STATS_STREAK);
+    drawCalendarMetric(renderer, metricCell(row, 1, 2), longest, StrId::STR_STATS_LONGEST_STREAK);
+  }
 
   displayStrongSleepFrame();
 }

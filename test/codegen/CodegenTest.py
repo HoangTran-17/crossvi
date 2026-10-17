@@ -431,9 +431,10 @@ class CodegenTest(unittest.TestCase):
         enum_block = settings_header[settings_header.index("enum SLEEP_SCREEN_MODE") :
                                      settings_header.index("enum SLEEP_SCREEN_COVER_MODE")]
         self.assertLess(enum_block.index("READING_CALENDAR = 7"), enum_block.index("TRANSPARENT_CUSTOM = 10"))
-        self.assertIn("SLEEP_SCREEN_TRANSPARENT = 7", enum_block)
+        self.assertLess(enum_block.index("TRANSPARENT_CUSTOM = 10"), enum_block.index("LUNAR_CALENDAR = 11"))
+        self.assertNotIn("SLEEP_SCREEN_TRANSPARENT", enum_block)
+        self.assertIn("SLEEP_SCREEN_LUNAR_CALENDAR = 7", enum_block)
         self.assertIn("case TRANSPARENT_CUSTOM:", enum_block)
-        self.assertIn("case SLEEP_SCREEN_TRANSPARENT:", enum_block)
         for source in (settings, submenu):
             self.assertNotIn("StrId::STR_TRANSPARENT_SLEEP", source)
 
@@ -3605,6 +3606,8 @@ class CodegenTest(unittest.TestCase):
         self.assertIn("StrId::STR_CUSTOM_WITH_STATS", settings)
         self.assertIn("StrId::STR_COVER_WITH_STATS", submenu)
         self.assertIn("StrId::STR_CUSTOM_WITH_STATS", submenu)
+        self.assertIn("StrId::STR_LUNAR_CALENDAR", settings)
+        self.assertIn("StrId::STR_LUNAR_CALENDAR", submenu)
 
     def test_settings_hide_inapplicable_choices_and_defer_dictionary_scan(self):
         settings = (REPO_ROOT / "src/SettingsList.h").read_text(encoding="utf-8")
