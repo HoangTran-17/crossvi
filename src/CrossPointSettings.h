@@ -129,6 +129,13 @@ class CrossPointSettings {
     SLEEP_GHOST_FULL_THREE_TIMES = 8,
     SLEEP_GHOSTING_TREATMENT_COUNT
   };
+  enum SLEEP_CALENDAR_LAYOUT {
+    CALENDAR_LAYOUT_FULL = 0,
+    CALENDAR_LAYOUT_MINIMAL = 1,
+    CALENDAR_LAYOUT_TEAR_OFF = 2,
+    CALENDAR_LAYOUT_READING = 3,
+    SLEEP_CALENDAR_LAYOUT_COUNT
+  };
 
   // Status bar enum - legacy
   enum STATUS_BAR_MODE {
@@ -431,6 +438,8 @@ class CrossPointSettings {
   int16_t sleepScreenImageOffsetY = 0;
   // Extra panel conditioning before the mandatory terminal sleep refresh.
   uint8_t sleepGhostingTreatment = SLEEP_GHOST_FAST_CLEAN_FULL;
+  // Arrangement of the lunar calendar sleep screen.
+  uint8_t sleepCalendarLayout = CALENDAR_LAYOUT_FULL;
   // Status bar settings (statusBar retained for migration only)
   uint8_t statusBar = FULL;
   uint8_t statusBarChapterPageCount = 1;

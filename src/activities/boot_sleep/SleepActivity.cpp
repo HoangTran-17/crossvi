@@ -236,6 +236,21 @@ void drawFittedLine(const GfxRenderer& renderer, const int x, const int y, const
   renderer.drawText(fontId, x, y, shown.c_str(), true, style);
 }
 
+// Centered variant of drawFittedLine for a single text.
+void drawCenteredFittedLine(const GfxRenderer& renderer, const Rect& rect, const int y, const char* text,
+                            std::initializer_list<int> fonts,
+                            const EpdFontFamily::Style style = EpdFontFamily::REGULAR) {
+  for (const int fontId : fonts) {
+    if (renderer.getTextWidth(fontId, text, style) <= rect.width) {
+      drawCenteredInRect(renderer, fontId, rect, y, text, style);
+      return;
+    }
+  }
+  const int fontId = *(fonts.end() - 1);
+  const std::string shown = renderer.truncatedText(fontId, text, rect.width, style);
+  drawCenteredInRect(renderer, fontId, rect, y, shown.c_str(), style);
+}
+
 struct SleepBookSummary {
   std::string title;
   std::string author;
@@ -1008,6 +1023,211 @@ void SleepActivity::renderReadingCalendarSleepScreen() {
   displayStrongSleepFrame();
 }
 
+namespace {
+constexpr int LUNAR_SECTION_GAP = 10;
+
+void formatSolarMonth(const ReadingStatsDateTime& now, char* out, const size_t size) {
+  snprintf(out, size, "Tháng %u năm %u", static_cast<unsigned>(now.date.month), static_cast<unsigned>(now.date.year));
+}
+
+void formatLunarDate(const lunar::DayInfo& day, char* out, const size_t size) {
+  snprintf(out, size, "%u tháng %u%s năm %s", static_cast<unsigned>(day.lunarDay),
+           static_cast<unsigned>(day.lunarMonth), day.lunarLeap ? " nhuận" : "", day.yearCanChi.name);
+}
+
+void formatDayMonthCanChi(const lunar::DayInfo& day, char* out, const size_t size) {
+  snprintf(out, size, "Ngày %s - Tháng %s", day.dayCanChi.name, day.monthCanChi.name);
+}
+
+// Full: day number beside the month and lunar date, then one day-quality line.
+// Returns the y below the block.
+int drawFullLunarDateBlock(const GfxRenderer& renderer, const Rect& content, int y, const ReadingStatsDateTime& now,
+                           const lunar::DayInfo& day) {
+  const int right = content.x + content.width - 1;
+  const int ui10Line = renderer.getLineHeight(UI_10_FONT_ID);
+  const int ui12Line = renderer.getLineHeight(UI_12_FONT_ID);
+
+  char dayNumber[4];
+  snprintf(dayNumber, sizeof(dayNumber), "%u", static_cast<unsigned>(now.date.day));
+  const int dayWidth = renderer.getTextWidth(SLEEP_DIGITS_48_FONT_ID, dayNumber);
+  const int dayHeight = digitInkHeight(renderer, SLEEP_DIGITS_48_FONT_ID);
+  char solarMonth[32];
+  formatSolarMonth(now, solarMonth, sizeof(solarMonth));
+  char lunarDate[64];
+  formatLunarDate(day, lunarDate, sizeof(lunarDate));
+  char canChi[56];
+  formatDayMonthCanChi(day, canChi, sizeof(canChi));
+  const int textHeight = ui12Line * 2 + ui10Line + 8;
+  const int blockHeight = std::max(dayHeight, textHeight);
+  drawDigits(renderer, SLEEP_DIGITS_48_FONT_ID, content.x + 4, y + (blockHeight - dayHeight) / 2, dayNumber);
+  const int textX = content.x + 4 + dayWidth + 20;
+  const int textWidth = std::max(1, right + 1 - textX);
+  int textY = y + (blockHeight - textHeight) / 2;
+  drawFittedLine(renderer, textX, textY, textWidth, {solarMonth}, {UI_12_FONT_ID, UI_10_FONT_ID});
+  textY += ui12Line + 4;
+  drawFittedLine(renderer, textX, textY, textWidth, {lunarDate}, {UI_12_FONT_ID, UI_10_FONT_ID, SMALL_FONT_ID},
+                 EpdFontFamily::BOLD);
+  textY += ui12Line + 4;
+  drawFittedLine(renderer, textX, textY, textWidth, {canChi}, {UI_10_FONT_ID, SMALL_FONT_ID});
+  y += blockHeight + LUNAR_SECTION_GAP;
+  renderer.drawLine(content.x, y, right, y);
+  y += LUNAR_SECTION_GAP;
+
+  // Day quality: hoàng/hắc đạo, trực, star and the current or next good hour.
+  const lunar::HourSlot hour = lunar::currentOrNextHoangDaoHour(day, now.hour);
+  const char* hourLabel = hour.current ? "Giờ tốt:" : "Giờ tốt tới:";
+  char hourText[40];
+  snprintf(hourText, sizeof(hourText), "%s %s %u-%uh", hourLabel, lunar::chiName(hour.chi),
+           static_cast<unsigned>(hour.startHour), static_cast<unsigned>((hour.startHour + 2) % 24));
+  const char* dayKind = day.hoangDao ? "Hoàng đạo" : "Hắc đạo";
+  char qualityFull[128];
+  snprintf(qualityFull, sizeof(qualityFull), "%s (%s) - Trực %s - Sao %s - %s", dayKind, lunar::deityName(day.deity),
+           lunar::trucName(day.truc), lunar::starName(day.star), hourText);
+  char qualityShort[112];
+  snprintf(qualityShort, sizeof(qualityShort), "%s - Trực %s - Sao %s - %s", dayKind, lunar::trucName(day.truc),
+           lunar::starName(day.star), hourText);
+  char qualityMinimal[96];
+  snprintf(qualityMinimal, sizeof(qualityMinimal), "%s - Trực %s - Sao %s - %s %s", dayKind, lunar::trucName(day.truc),
+           lunar::starName(day.star), hourLabel, lunar::chiName(hour.chi));
+  drawFittedLine(renderer, content.x, y, content.width, {qualityFull, qualityShort, qualityMinimal},
+                 {UI_10_FONT_ID, SMALL_FONT_ID});
+  return y + ui10Line + LUNAR_SECTION_GAP;
+}
+
+// Minimal: the solar day alone in large type, its lunar counterpart below.
+void drawMinimalLunarLayout(const GfxRenderer& renderer, const Rect& area, const ReadingStatsDateTime& now,
+                            const lunar::DayInfo& day) {
+  const int ui10Line = renderer.getLineHeight(UI_10_FONT_ID);
+  const int ui12Line = renderer.getLineHeight(UI_12_FONT_ID);
+  const int dayHeight = digitInkHeight(renderer, SLEEP_DIGITS_88_FONT_ID);
+  constexpr int ruleWidth = 48;
+  const int blockHeight = ui12Line + 24 + dayHeight + 28 + ui12Line + 36 + 1 + 36 + ui12Line + 6 + ui10Line;
+  // Sit a little above the geometric center, as printed calendars do.
+  int y = area.y + std::max(0, (area.height - blockHeight) * 2 / 5);
+
+  drawCenteredFittedLine(renderer, area, y, lunar::weekdayName(day.weekday), {UI_12_FONT_ID}, EpdFontFamily::BOLD);
+  y += ui12Line + 24;
+  char dayNumber[4];
+  snprintf(dayNumber, sizeof(dayNumber), "%u", static_cast<unsigned>(now.date.day));
+  drawDigits(renderer, SLEEP_DIGITS_88_FONT_ID,
+             area.x + (area.width - renderer.getTextWidth(SLEEP_DIGITS_88_FONT_ID, dayNumber)) / 2, y, dayNumber);
+  y += dayHeight + 28;
+  char solarMonth[32];
+  formatSolarMonth(now, solarMonth, sizeof(solarMonth));
+  drawCenteredFittedLine(renderer, area, y, solarMonth, {UI_12_FONT_ID, UI_10_FONT_ID});
+  y += ui12Line + 36;
+  renderer.drawLine(area.x + (area.width - ruleWidth) / 2, y, area.x + (area.width + ruleWidth) / 2, y);
+  y += 1 + 36;
+  char lunarDate[64];
+  formatLunarDate(day, lunarDate, sizeof(lunarDate));
+  drawCenteredFittedLine(renderer, area, y, lunarDate, {UI_12_FONT_ID, UI_10_FONT_ID, SMALL_FONT_ID},
+                         EpdFontFamily::BOLD);
+  y += ui12Line + 6;
+  char canChi[56];
+  formatDayMonthCanChi(day, canChi, sizeof(canChi));
+  drawCenteredFittedLine(renderer, area, y, canChi, {UI_10_FONT_ID, SMALL_FONT_ID});
+}
+
+// Tear-off: a Vietnamese wall-calendar page carrying the day's almanac and
+// every hoàng đạo hour.
+void drawTearOffLunarLayout(const GfxRenderer& renderer, const Rect& area, const ReadingStatsDateTime& now,
+                            const lunar::DayInfo& day) {
+  const int ui10Line = renderer.getLineHeight(UI_10_FONT_ID);
+  const int ui12Line = renderer.getLineHeight(UI_12_FONT_ID);
+  const int dayHeight = digitInkHeight(renderer, SLEEP_DIGITS_88_FONT_ID);
+  const int lunarDayHeight = digitInkHeight(renderer, SLEEP_DIGITS_48_FONT_ID);
+  const int sideTextHeight = ui12Line + 4 + ui10Line;
+  const int columnHeight = std::max(lunarDayHeight, sideTextHeight);
+  constexpr int HOUR_COLUMNS = 3;
+  std::array<uint8_t, 12> hours{};
+  int hourCount = 0;
+  for (uint8_t chi = 0; chi < hours.size(); ++chi) {
+    if (day.hoangDaoHours & (1u << chi)) hours[hourCount++] = chi;
+  }
+  const int hourRows = (hourCount + HOUR_COLUMNS - 1) / HOUR_COLUMNS;
+  const int hourRowHeight = ui10Line + 4;
+
+  // Spread the spare height over the gaps between sections (7.5 gap units),
+  // then center the whole page in what is left.
+  const int fixedHeight = ui12Line + 8 + dayHeight + ui12Line + 1 + columnHeight + ui12Line + 1 + ui12Line + 4 +
+                          ui10Line + ui10Line + 4 + hourRows * hourRowHeight;
+  const int gap = std::clamp((area.height - fixedHeight) * 2 / 15, 8, 32);
+  int y = area.y + std::max(0, (area.height - fixedHeight - gap * 15 / 2) / 2);
+  const int right = area.x + area.width - 1;
+
+  char solarMonth[32];
+  formatSolarMonth(now, solarMonth, sizeof(solarMonth));
+  drawCenteredFittedLine(renderer, area, y, solarMonth, {UI_12_FONT_ID, UI_10_FONT_ID}, EpdFontFamily::BOLD);
+  y += ui12Line + 6;
+  renderer.fillRect(area.x, y, area.width, 2);
+  y += 2 + gap;
+
+  char dayNumber[4];
+  snprintf(dayNumber, sizeof(dayNumber), "%u", static_cast<unsigned>(now.date.day));
+  drawDigits(renderer, SLEEP_DIGITS_88_FONT_ID,
+             area.x + (area.width - renderer.getTextWidth(SLEEP_DIGITS_88_FONT_ID, dayNumber)) / 2, y, dayNumber);
+  y += dayHeight + gap;
+  drawCenteredFittedLine(renderer, area, y, lunar::weekdayName(day.weekday), {UI_12_FONT_ID}, EpdFontFamily::BOLD);
+  y += ui12Line + gap;
+  renderer.drawLine(area.x, y, right, y);
+  y += 1 + gap;
+
+  // Lunar row: month with its can chi, the lunar day, then the year.
+  const int columnWidth = area.width / 3;
+  const Rect monthColumn{area.x, y, columnWidth, columnHeight};
+  const Rect dayColumn{area.x + columnWidth, y, area.width - columnWidth * 2, columnHeight};
+  const Rect yearColumn{dayColumn.x + dayColumn.width, y, columnWidth, columnHeight};
+  const int sideTextY = y + (columnHeight - sideTextHeight) / 2;
+  char lunarMonth[24];
+  snprintf(lunarMonth, sizeof(lunarMonth), "Tháng %u%s", static_cast<unsigned>(day.lunarMonth),
+           day.lunarLeap ? " nhuận" : "");
+  drawCenteredFittedLine(renderer, monthColumn, sideTextY, lunarMonth, {UI_12_FONT_ID, UI_10_FONT_ID},
+                         EpdFontFamily::BOLD);
+  drawCenteredFittedLine(renderer, monthColumn, sideTextY + ui12Line + 4, day.monthCanChi.name,
+                         {UI_10_FONT_ID, SMALL_FONT_ID});
+  char lunarDay[4];
+  snprintf(lunarDay, sizeof(lunarDay), "%u", static_cast<unsigned>(day.lunarDay));
+  drawDigits(renderer, SLEEP_DIGITS_48_FONT_ID,
+             dayColumn.x + (dayColumn.width - renderer.getTextWidth(SLEEP_DIGITS_48_FONT_ID, lunarDay)) / 2,
+             y + (columnHeight - lunarDayHeight) / 2, lunarDay);
+  drawCenteredFittedLine(renderer, yearColumn, sideTextY, "Năm", {UI_12_FONT_ID}, EpdFontFamily::BOLD);
+  drawCenteredFittedLine(renderer, yearColumn, sideTextY + ui12Line + 4, day.yearCanChi.name,
+                         {UI_10_FONT_ID, SMALL_FONT_ID});
+  renderer.drawLine(dayColumn.x, y + 4, dayColumn.x, y + columnHeight - 4);
+  renderer.drawLine(yearColumn.x, y + 4, yearColumn.x, y + columnHeight - 4);
+  y += columnHeight + gap / 2;
+  char dayCanChi[32];
+  snprintf(dayCanChi, sizeof(dayCanChi), "Ngày %s", day.dayCanChi.name);
+  drawCenteredFittedLine(renderer, area, y, dayCanChi, {UI_12_FONT_ID}, EpdFontFamily::BOLD);
+  y += ui12Line + gap;
+  renderer.drawLine(area.x, y, right, y);
+  y += 1 + gap;
+
+  char dayKind[48];
+  snprintf(dayKind, sizeof(dayKind), "%s (%s)", day.hoangDao ? "Hoàng đạo" : "Hắc đạo", lunar::deityName(day.deity));
+  drawCenteredFittedLine(renderer, area, y, dayKind, {UI_12_FONT_ID, UI_10_FONT_ID}, EpdFontFamily::BOLD);
+  y += ui12Line + 4;
+  char trucStar[48];
+  snprintf(trucStar, sizeof(trucStar), "Trực %s - Sao %s", lunar::trucName(day.truc), lunar::starName(day.star));
+  drawCenteredFittedLine(renderer, area, y, trucStar, {UI_10_FONT_ID, SMALL_FONT_ID});
+  y += ui10Line + gap;
+
+  drawCenteredFittedLine(renderer, area, y, "Giờ hoàng đạo", {UI_10_FONT_ID}, EpdFontFamily::BOLD);
+  y += ui10Line + 4;
+  for (int index = 0; index < hourCount; ++index) {
+    const uint8_t chi = hours[index];
+    const unsigned start = (23u + 2u * chi) % 24u;
+    char label[24];
+    snprintf(label, sizeof(label), "%s %u-%uh", lunar::chiName(chi), start, (start + 2u) % 24u);
+    const int column = index % HOUR_COLUMNS;
+    const int cellX = area.x + area.width * column / HOUR_COLUMNS;
+    const Rect cell{cellX, y + (index / HOUR_COLUMNS) * hourRowHeight,
+                    area.x + area.width * (column + 1) / HOUR_COLUMNS - cellX, hourRowHeight};
+    drawCenteredFittedLine(renderer, cell, cell.y, label, {UI_10_FONT_ID, SMALL_FONT_ID});
+  }
+}
+}  // namespace
+
 // Lunar terms are Vietnamese by nature and the lunar library names are
 // Vietnamese only, so this screen's calendar text is not routed through I18N.
 void SleepActivity::renderLunarCalendarSleepScreen() {
@@ -1017,6 +1237,37 @@ void SleepActivity::renderLunarCalendarSleepScreen() {
       !lunar::computeDay(now.date.year, now.date.month, now.date.day, day)) {
     LOG_ERR("SLP", "Lunar calendar unavailable: clock invalid");
     return renderReadingCalendarSleepScreen();
+  }
+
+  renderer.clearScreen();
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const Rect screen{0, 0, renderer.getScreenWidth(), renderer.getScreenHeight()};
+  const int side = std::max(18, metrics.contentSidePadding);
+  const Rect content{screen.x + side, screen.y + 16, std::max(1, screen.width - side * 2),
+                     std::max(1, screen.height - 32)};
+  const int right = content.x + content.width - 1;
+  const int bottom = content.y + content.height;
+  const int smallLine = renderer.getLineHeight(SMALL_FONT_ID);
+  const int ui10Line = renderer.getLineHeight(UI_10_FONT_ID);
+  constexpr int sectionGap = LUNAR_SECTION_GAP;
+  const uint8_t layout = SETTINGS.sleepCalendarLayout < CrossPointSettings::SLEEP_CALENDAR_LAYOUT_COUNT
+                             ? SETTINGS.sleepCalendarLayout
+                             : CrossPointSettings::CALENDAR_LAYOUT_FULL;
+
+  GUI.drawBatteryLeft(renderer, Rect{content.x, content.y, metrics.batteryWidth, metrics.batteryHeight},
+                      powerManager.getBatteryPercentage(),
+                      SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS);
+  if (layout == CrossPointSettings::CALENDAR_LAYOUT_MINIMAL || layout == CrossPointSettings::CALENDAR_LAYOUT_TEAR_OFF) {
+    // These layouts carry no reading stats, so the stats files stay unread.
+    const int top = content.y + metrics.batteryHeight + sectionGap;
+    const Rect area{content.x, top, content.width, std::max(1, bottom - top)};
+    if (layout == CrossPointSettings::CALENDAR_LAYOUT_MINIMAL) {
+      drawMinimalLunarLayout(renderer, area, now, day);
+    } else {
+      drawTearOffLunarLayout(renderer, area, now, day);
+    }
+    displayStrongSleepFrame();
+    return;
   }
 
   GlobalReadingStats::LoadStatus globalStatus = GlobalReadingStats::LoadStatus::Missing;
@@ -1043,23 +1294,7 @@ void SleepActivity::renderLunarCalendarSleepScreen() {
             static_cast<unsigned>(dailyStatus));
   }
 
-  renderer.clearScreen();
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const Rect screen{0, 0, renderer.getScreenWidth(), renderer.getScreenHeight()};
-  const int side = std::max(18, metrics.contentSidePadding);
-  const Rect content{screen.x + side, screen.y + 16, std::max(1, screen.width - side * 2),
-                     std::max(1, screen.height - 32)};
-  const int right = content.x + content.width - 1;
-  const int bottom = content.y + content.height;
-  const int smallLine = renderer.getLineHeight(SMALL_FONT_ID);
-  const int ui10Line = renderer.getLineHeight(UI_10_FONT_ID);
-  const int ui12Line = renderer.getLineHeight(UI_12_FONT_ID);
-  constexpr int sectionGap = 10;
-
-  // Status bar: battery, weekday and solar date.
-  GUI.drawBatteryLeft(renderer, Rect{content.x, content.y, metrics.batteryWidth, metrics.batteryHeight},
-                      powerManager.getBatteryPercentage(),
-                      SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS);
+  // Status bar: weekday and solar date beside the battery.
   char solarDate[40];
   snprintf(solarDate, sizeof(solarDate), "%s - %02u/%02u/%04u", lunar::weekdayName(day.weekday),
            static_cast<unsigned>(now.date.day), static_cast<unsigned>(now.date.month),
@@ -1070,54 +1305,17 @@ void SleepActivity::renderLunarCalendarSleepScreen() {
   renderer.drawLine(content.x, y, right, y);
   y += sectionGap + 4;
 
-  // Date block: large solar day, month, lunar date and can chi.
-  char dayNumber[4];
-  snprintf(dayNumber, sizeof(dayNumber), "%u", static_cast<unsigned>(now.date.day));
-  const int dayWidth = renderer.getTextWidth(SLEEP_DIGITS_48_FONT_ID, dayNumber);
-  const int dayHeight = digitInkHeight(renderer, SLEEP_DIGITS_48_FONT_ID);
-  char solarMonth[32];
-  snprintf(solarMonth, sizeof(solarMonth), "Tháng %u năm %u", static_cast<unsigned>(now.date.month),
-           static_cast<unsigned>(now.date.year));
-  char lunarDate[64];
-  snprintf(lunarDate, sizeof(lunarDate), "%u tháng %u%s năm %s", static_cast<unsigned>(day.lunarDay),
-           static_cast<unsigned>(day.lunarMonth), day.lunarLeap ? " nhuận" : "", day.yearCanChi.name);
-  char canChi[56];
-  snprintf(canChi, sizeof(canChi), "Ngày %s - Tháng %s", day.dayCanChi.name, day.monthCanChi.name);
-  const int textHeight = ui12Line * 2 + ui10Line + 8;
-  const int blockHeight = std::max(dayHeight, textHeight);
-  drawDigits(renderer, SLEEP_DIGITS_48_FONT_ID, content.x + 4, y + (blockHeight - dayHeight) / 2, dayNumber);
-  const int textX = content.x + 4 + dayWidth + 20;
-  const int textWidth = std::max(1, right + 1 - textX);
-  int textY = y + (blockHeight - textHeight) / 2;
-  drawFittedLine(renderer, textX, textY, textWidth, {solarMonth}, {UI_12_FONT_ID, UI_10_FONT_ID});
-  textY += ui12Line + 4;
-  drawFittedLine(renderer, textX, textY, textWidth, {lunarDate}, {UI_12_FONT_ID, UI_10_FONT_ID, SMALL_FONT_ID},
-                 EpdFontFamily::BOLD);
-  textY += ui12Line + 4;
-  drawFittedLine(renderer, textX, textY, textWidth, {canChi}, {UI_10_FONT_ID, SMALL_FONT_ID});
-  y += blockHeight + sectionGap;
-  renderer.drawLine(content.x, y, right, y);
-  y += sectionGap;
-
-  // Day quality: hoàng/hắc đạo, trực, star and the current or next good hour.
-  const lunar::HourSlot hour = lunar::currentOrNextHoangDaoHour(day, now.hour);
-  const char* hourLabel = hour.current ? "Giờ tốt:" : "Giờ tốt tới:";
-  char hourText[40];
-  snprintf(hourText, sizeof(hourText), "%s %s %u-%uh", hourLabel, lunar::chiName(hour.chi),
-           static_cast<unsigned>(hour.startHour), static_cast<unsigned>((hour.startHour + 2) % 24));
-  const char* dayKind = day.hoangDao ? "Hoàng đạo" : "Hắc đạo";
-  char qualityFull[128];
-  snprintf(qualityFull, sizeof(qualityFull), "%s (%s) - Trực %s - Sao %s - %s", dayKind, lunar::deityName(day.deity),
-           lunar::trucName(day.truc), lunar::starName(day.star), hourText);
-  char qualityShort[112];
-  snprintf(qualityShort, sizeof(qualityShort), "%s - Trực %s - Sao %s - %s", dayKind, lunar::trucName(day.truc),
-           lunar::starName(day.star), hourText);
-  char qualityMinimal[96];
-  snprintf(qualityMinimal, sizeof(qualityMinimal), "%s - Trực %s - Sao %s - %s %s", dayKind, lunar::trucName(day.truc),
-           lunar::starName(day.star), hourLabel, lunar::chiName(hour.chi));
-  drawFittedLine(renderer, content.x, y, content.width, {qualityFull, qualityShort, qualityMinimal},
-                 {UI_10_FONT_ID, SMALL_FONT_ID});
-  y += ui10Line + sectionGap;
+  if (layout == CrossPointSettings::CALENDAR_LAYOUT_READING) {
+    // Reading: one compact lunar line leaves the height to the month grid.
+    char lunarDate[64];
+    formatLunarDate(day, lunarDate, sizeof(lunarDate));
+    char lunarLine[112];
+    snprintf(lunarLine, sizeof(lunarLine), "Âm lịch %s - Ngày %s", lunarDate, day.dayCanChi.name);
+    drawFittedLine(renderer, content.x, y, content.width, {lunarLine, lunarDate}, {UI_10_FONT_ID, SMALL_FONT_ID});
+    y += ui10Line + sectionGap;
+  } else {
+    y = drawFullLunarDateBlock(renderer, content, y, now, day);
+  }
 
   // Month grid; metric rows give way from the bottom before cells get too
   // small to carry the lunar day numbers.

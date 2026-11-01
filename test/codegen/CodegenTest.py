@@ -3608,6 +3608,9 @@ class CodegenTest(unittest.TestCase):
         self.assertIn("StrId::STR_CUSTOM_WITH_STATS", submenu)
         self.assertIn("StrId::STR_LUNAR_CALENDAR", settings)
         self.assertIn("StrId::STR_LUNAR_CALENDAR", submenu)
+        self.assertIn('"sleepCalendarLayout"', settings)
+        self.assertIn("SLEEP_SCREEN_MODE::LUNAR_CALENDAR) {", submenu)
+        self.assertIn("sleepCalendarLayoutLabels()", submenu)
 
     def test_settings_hide_inapplicable_choices_and_defer_dictionary_scan(self):
         settings = (REPO_ROOT / "src/SettingsList.h").read_text(encoding="utf-8")

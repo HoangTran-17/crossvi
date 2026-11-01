@@ -198,6 +198,10 @@ void SettingsSubmenuActivity::rebuildSettings() {
               SettingInfo::Enum(StrId::STR_SLEEP_COVER_FILTER, &CrossPointSettings::sleepScreenCoverFilter,
                                 {StrId::STR_NONE_OPT, StrId::STR_FILTER_CONTRAST, StrId::STR_INVERTED}));
         }
+        if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::LUNAR_CALENDAR) {
+          settings_.push_back(SettingInfo::Enum(StrId::STR_CALENDAR_LAYOUT, &CrossPointSettings::sleepCalendarLayout,
+                                                sleepCalendarLayoutLabels()));
+        }
       }
       break;
     }

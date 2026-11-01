@@ -522,6 +522,27 @@ TEST(SettingsJsonIntegration, PersistsAndClampsSleepGhostingTreatment) {
   EXPECT_EQ(SETTINGS.sleepGhostingTreatment, CrossPointSettings::SLEEP_GHOST_FAST_CLEAN_FULL);
 }
 
+TEST(SettingsJsonIntegration, PersistsAndClampsSleepCalendarLayout) {
+  resetFakes();
+  SETTINGS.sleepCalendarLayout = CrossPointSettings::CALENDAR_LAYOUT_TEAR_OFF;
+  ASSERT_TRUE(JsonSettingsIO::saveSettings(SETTINGS, SETTINGS_JSON));
+
+  SETTINGS.sleepCalendarLayout = CrossPointSettings::CALENDAR_LAYOUT_FULL;
+  bool needsResave = false;
+  ASSERT_TRUE(JsonSettingsIO::loadSettings(SETTINGS, LegacySettingsTestSupport::lastSavedJson().c_str(), &needsResave));
+  EXPECT_EQ(SETTINGS.sleepCalendarLayout, CrossPointSettings::CALENDAR_LAYOUT_TEAR_OFF);
+
+  // Settings written before the layout existed keep the original full layout.
+  SETTINGS.sleepCalendarLayout = CrossPointSettings::CALENDAR_LAYOUT_FULL;
+  ASSERT_TRUE(
+      JsonSettingsIO::loadSettings(SETTINGS, R"({"statusBarChapterPageCount":1,"sleepScreen":11})", &needsResave));
+  EXPECT_EQ(SETTINGS.sleepCalendarLayout, CrossPointSettings::CALENDAR_LAYOUT_FULL);
+
+  ASSERT_TRUE(JsonSettingsIO::loadSettings(SETTINGS, R"({"statusBarChapterPageCount":1,"sleepCalendarLayout":9})",
+                                           &needsResave));
+  EXPECT_EQ(SETTINGS.sleepCalendarLayout, CrossPointSettings::CALENDAR_LAYOUT_FULL);
+}
+
 TEST(SettingsJsonIntegration, PersistsAndClampsSleepImageTransform) {
   resetFakes();
   SETTINGS.sleepScreenImageZoom = 175;
