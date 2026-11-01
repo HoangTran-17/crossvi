@@ -91,6 +91,13 @@ EpdFontFamily notoserif18FontFamily(&notoserif18RegularFont, &notoserif18BoldFon
 EpdFont smallFont(&notosans_8_regular);
 EpdFontFamily smallFontFamily(&smallFont);
 
+// Sleep-screen day numbers; kept outside OMIT_FONTS so the sleep screen never
+// depends on the SD card or on optional reader fonts.
+EpdFont sleepDigits48Font(&notoserif_digits_48);
+EpdFontFamily sleepDigits48FontFamily(&sleepDigits48Font);
+EpdFont sleepDigits88Font(&notoserif_digits_88);
+EpdFontFamily sleepDigits88FontFamily(&sleepDigits88Font);
+
 EpdFont ui10RegularFont(&ubuntu_10_regular);
 EpdFont ui10BoldFont(&ubuntu_10_bold);
 EpdFontFamily ui10FontFamily(&ui10RegularFont, &ui10BoldFont);
@@ -332,6 +339,8 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
+  renderer.insertFont(SLEEP_DIGITS_48_FONT_ID, sleepDigits48FontFamily);
+  renderer.insertFont(SLEEP_DIGITS_88_FONT_ID, sleepDigits88FontFamily);
 
   LOG_DBG("MAIN", "Built-in fonts setup");
 }

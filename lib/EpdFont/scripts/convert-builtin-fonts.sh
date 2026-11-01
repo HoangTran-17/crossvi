@@ -102,6 +102,19 @@ python fontconvert.py notosans_8_regular 8 \
   ../builtinFonts/source/NotoSansArabic/NotoSansArabic-Regular.ttf \
   --additional-intervals 0x05D0,0x05EA "${ARABIC_INTERVALS[@]}" > ../builtinFonts/notosans_8_regular.h
 
+# Day numbers on the lunar calendar sleep screen. A digits-only subset keeps
+# the large sizes within a few KB of flash, and 1-bit output matches the B/W
+# sleep frame. fontconvert.py reads line metrics from '|', so it stays in.
+SLEEP_DIGITS_PATH="$UI_FALLBACK_DIR/NotoSerif-SleepDigits-Bold.ttf"
+python -m fontTools.subset ../builtinFonts/source/NotoSerif/NotoSerif-Bold.ttf \
+  --unicodes="U+0030-0039,U+007C" --layout-features='*' --output-file="$SLEEP_DIGITS_PATH"
+SLEEP_DIGIT_SIZES=(48 88)
+for size in ${SLEEP_DIGIT_SIZES[@]}; do
+  output_path="../builtinFonts/notoserif_digits_${size}.h"
+  python fontconvert.py notoserif_digits_${size} $size "$SLEEP_DIGITS_PATH" --pnum > $output_path
+  echo "Generated $output_path"
+done
+
 echo ""
 echo "Running compression verification..."
 python verify_compression.py ../builtinFonts/

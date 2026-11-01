@@ -165,54 +165,18 @@ void drawCalendarWeekdays(const GfxRenderer& renderer, const ReadingCalendarGrid
   }
 }
 
-struct TextInk {
-  static constexpr int MAX_WIDTH = 96;
-  static constexpr int MAX_HEIGHT = 64;
-  std::array<uint8_t, MAX_WIDTH * MAX_HEIGHT / 8> bits{};
-  int width = 0;
-  int height = 0;
-};
-
-// The largest built-in face is 18 pt. Render it once at (x, y), copy the ink
-// out of the framebuffer and erase it, so it can be redrawn enlarged without
-// adding a display font to flash.
-TextInk captureTextInk(const GfxRenderer& renderer, const int fontId, const int x, const int y, const char* text) {
-  const int width = std::min(TextInk::MAX_WIDTH, renderer.getTextWidth(fontId, text, EpdFontFamily::BOLD) + 4);
-  const int height = std::min(TextInk::MAX_HEIGHT, renderer.getLineHeight(fontId));
-  renderer.drawText(fontId, x, y, text, true, EpdFontFamily::BOLD);
-  int minX = width, minY = height, maxX = -1, maxY = -1;
-  for (int py = 0; py < height; ++py) {
-    for (int px = 0; px < width; ++px) {
-      if (!renderer.isPixelBlack(x + px, y + py)) continue;
-      minX = std::min(minX, px);
-      maxX = std::max(maxX, px);
-      minY = std::min(minY, py);
-      maxY = std::max(maxY, py);
-    }
-  }
-  TextInk ink;
-  if (maxX >= 0) {
-    ink.width = maxX - minX + 1;
-    ink.height = maxY - minY + 1;
-    for (int py = 0; py < ink.height; ++py) {
-      for (int px = 0; px < ink.width; ++px) {
-        if (!renderer.isPixelBlack(x + minX + px, y + minY + py)) continue;
-        const int bit = py * TextInk::MAX_WIDTH + px;
-        ink.bits[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
-      }
-    }
-  }
-  renderer.fillRect(x, y, width, height, false);
-  return ink;
+// The sleep digit fonts carry no descenders, so a day number's ink runs from
+// the top of the digits down to the baseline.
+int digitInkHeight(const GfxRenderer& renderer, const int fontId) {
+  const auto font = renderer.getFontMap().find(fontId);
+  const EpdGlyph* zero = font == renderer.getFontMap().end() ? nullptr : font->second.getGlyph('0');
+  return zero ? zero->top : renderer.getFontAscenderSize(fontId);
 }
 
-void drawTextInkScaled(const GfxRenderer& renderer, const TextInk& ink, const int x, const int y, const int scale) {
-  for (int py = 0; py < ink.height; ++py) {
-    for (int px = 0; px < ink.width; ++px) {
-      const int bit = py * TextInk::MAX_WIDTH + px;
-      if (ink.bits[bit / 8] & (1u << (bit % 8))) renderer.fillRect(x + px * scale, y + py * scale, scale, scale);
-    }
-  }
+// Draws `digits` with its ink top at `inkTop`.
+void drawDigits(const GfxRenderer& renderer, const int fontId, const int x, const int inkTop, const char* digits) {
+  renderer.drawText(fontId, x, inkTop - renderer.getFontAscenderSize(fontId) + digitInkHeight(renderer, fontId),
+                    digits);
 }
 
 // A cell carries the solar day at the top and the lunar day at the bottom.
@@ -1109,10 +1073,8 @@ void SleepActivity::renderLunarCalendarSleepScreen() {
   // Date block: large solar day, month, lunar date and can chi.
   char dayNumber[4];
   snprintf(dayNumber, sizeof(dayNumber), "%u", static_cast<unsigned>(now.date.day));
-  constexpr int dayScale = 3;
-  const TextInk dayInk = captureTextInk(renderer, NOTOSERIF_18_FONT_ID, content.x, y, dayNumber);
-  const int dayWidth = dayInk.width * dayScale;
-  const int dayHeight = dayInk.height * dayScale;
+  const int dayWidth = renderer.getTextWidth(SLEEP_DIGITS_48_FONT_ID, dayNumber);
+  const int dayHeight = digitInkHeight(renderer, SLEEP_DIGITS_48_FONT_ID);
   char solarMonth[32];
   snprintf(solarMonth, sizeof(solarMonth), "Tháng %u năm %u", static_cast<unsigned>(now.date.month),
            static_cast<unsigned>(now.date.year));
@@ -1123,7 +1085,7 @@ void SleepActivity::renderLunarCalendarSleepScreen() {
   snprintf(canChi, sizeof(canChi), "Ngày %s - Tháng %s", day.dayCanChi.name, day.monthCanChi.name);
   const int textHeight = ui12Line * 2 + ui10Line + 8;
   const int blockHeight = std::max(dayHeight, textHeight);
-  drawTextInkScaled(renderer, dayInk, content.x + 4, y + (blockHeight - dayHeight) / 2, dayScale);
+  drawDigits(renderer, SLEEP_DIGITS_48_FONT_ID, content.x + 4, y + (blockHeight - dayHeight) / 2, dayNumber);
   const int textX = content.x + 4 + dayWidth + 20;
   const int textWidth = std::max(1, right + 1 - textX);
   int textY = y + (blockHeight - textHeight) / 2;
