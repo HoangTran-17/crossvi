@@ -44,6 +44,7 @@
 #include "activities/ActivityManager.h"
 #include "activities/boot_sleep/SafeBootActivity.h"
 #include "activities/boot_sleep/SleepActivity.h"
+#include "activities/boot_sleep/SleepBriefFetcher.h"
 #include "activities/boot_sleep/SleepFrameStore.h"
 #include "activities/boot_sleep/SleepRefreshSchedule.h"
 #include "activities/reader/ReadingStatsUtils.h"
@@ -382,7 +383,10 @@ void setupDisplayAndFonts(bool seamless = false, bool withActivityManager = true
 
 // Runs after storage and settings are ready and before a timer wake draws the sleep screen. Data that the sleep
 // screen shows and that needs refreshing each day is brought up to date here.
-static void refreshSleepScreenData() {}
+static void refreshSleepScreenData() {
+  const uint16_t battery = powerManager.getBatteryPercentage();
+  sleep_brief_fetch::runOnTimerWake(static_cast<uint8_t>(battery > 100 ? 100 : battery));
+}
 
 [[noreturn]] static void sleepUntilNextRefresh(const uint32_t seconds) {
   timerWakeGuard = 0;

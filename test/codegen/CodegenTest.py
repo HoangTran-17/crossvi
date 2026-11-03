@@ -3616,6 +3616,8 @@ class CodegenTest(unittest.TestCase):
         self.assertIn("StrId::STR_CALENDAR_LAYOUT_DAILY_REVIEW", settings)
         self.assertIn('"sleepRefreshTime"', settings)
         self.assertIn("sleepRefreshTimeLabels()", submenu)
+        self.assertIn('"sleepBriefFetch"', settings)
+        self.assertIn("&CrossPointSettings::sleepBriefFetch", submenu)
 
     def test_settings_hide_inapplicable_choices_and_defer_dictionary_scan(self):
         settings = (REPO_ROOT / "src/SettingsList.h").read_text(encoding="utf-8")

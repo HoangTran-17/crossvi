@@ -43,6 +43,9 @@ struct Event {
 
 struct Brief {
   std::string updated;  // "HH:MM dd/mm", empty when `generated` is absent or malformed
+  int generatedYear = 0;  // 0 when `updated` is empty
+  int generatedMonth = 0;
+  int generatedDay = 0;
   std::vector<Weather> weather;
   bool hasGold = false;
   Gold gold;
@@ -59,6 +62,14 @@ enum class ParseStatus : uint8_t { Ok, TooLarge, InvalidJson, UnsupportedVersion
 // Schema v1. Unknown keys are ignored; a block with missing required fields is
 // dropped on its own and never invalidates the rest.
 ParseStatus parseBrief(const char* json, size_t length, Brief& out);
+
+// Whole calendar days from the `generated` date to the given local date; -1 when `generated` is unknown or lies in
+// the future.
+int generatedAgeDays(const Brief& brief, int year, int month, int day);
+
+// Footer text for the brief page: "Cập nhật 05:00 03/11", or "Cập nhật 2 ngày trước - 05:00 01/11" once the data is
+// more than one day old. Empty when `generated` is unknown.
+std::string updatedLabel(const Brief& brief, int year, int month, int day);
 
 // Picks one non-empty line of a UTF-8 quotes file. The pick depends only on
 // `dayOfYear`, so it is stable for the whole day. Optional " — author" suffix.

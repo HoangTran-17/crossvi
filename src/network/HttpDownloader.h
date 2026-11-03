@@ -2,6 +2,7 @@
 #include <HalStorage.h>
 
 #include <functional>
+#include <cstdint>
 #include <limits>
 #include <string>
 
@@ -39,6 +40,13 @@ class HttpDownloader {
    */
   static bool fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username = "",
                        const std::string& password = "");
+
+  /**
+   * Stream a body to onData for unattended callers: the whole request, including redirects, is cut off after
+   * budgetMs, the body is capped at maxBytes, and the URL is never logged.
+   */
+  static DownloadError fetchBounded(const std::string& url, uint32_t budgetMs, size_t maxBytes,
+                                    const DataCallback& onData);
 
   /**
    * Fetch a public GitHub release asset and require its API-provided SHA-256.

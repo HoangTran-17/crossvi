@@ -10,6 +10,7 @@
 #include <mbedtls/sha256.h>
 #include <strings.h>
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <functional>
@@ -40,7 +41,15 @@ struct Sink {
   size_t downloaded = 0;
   size_t maxBytes = std::numeric_limits<size_t>::max();
   bool allowGithubReleaseHttpRedirect = false;
+  int timeoutMs = HTTP_TIMEOUT_MS;
+  bool hasDeadline = false;
+  uint32_t deadlineMs = 0;  // millis() value; compared wrap-safe
 };
+
+// Time left before the sink's wall-clock deadline: INT32_MAX without one, <= 0 once it has passed.
+int32_t remainingMs(const Sink& sink) {
+  return sink.hasDeadline ? static_cast<int32_t>(sink.deadlineMs - millis()) : std::numeric_limits<int32_t>::max();
+}
 
 bool isRedirect(const int status) {
   return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
@@ -115,6 +124,11 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
   int64_t contentLength = -1;
   int status = 0;
   for (int hop = 0; hop <= MAX_REDIRECTS; ++hop) {
+    const int32_t remaining = remainingMs(sink);
+    if (remaining <= 0) {
+      LOG_ERR("HTTP", "deadline reached before request");
+      return HttpDownloader::HTTP_ERROR;
+    }
     RedirectHeader redirect;
     esp_http_client_config_t config = {};
     config.url = currentUrl.c_str();
@@ -122,7 +136,7 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
     // Signed GitHub release redirects can be close to 1 KiB. Leave room for
     // the request line and headers without paying that cost for short URLs.
     config.buffer_size_tx = static_cast<int>(currentUrl.size() + HTTP_TX_BUF);
-    config.timeout_ms = HTTP_TIMEOUT_MS;
+    config.timeout_ms = std::min<int32_t>(sink.timeoutMs, remaining);
     config.disable_auto_redirect = true;
     // Verify HTTPS against the bundled CA roots. This build has esp-tls
     // CONFIG_ESP_TLS_INSECURE off, so an unverified TLS handshake can't be set
@@ -223,6 +237,11 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
       esp_http_client_cleanup(client);
       return HttpDownloader::ABORTED;
     }
+    if (remainingMs(sink) <= 0) {
+      LOG_ERR("HTTP", "deadline reached after %zu bytes", sink.downloaded);
+      esp_http_client_cleanup(client);
+      return HttpDownloader::HTTP_ERROR;
+    }
     const int read = esp_http_client_read(client, buf.get(), READ_CHUNK);
     if (read < 0) {
       LOG_ERR("HTTP", "read error after %zu bytes", sink.downloaded);
@@ -315,6 +334,18 @@ bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData
   Sink sink;
   sink.write = onData;
   return runGetSecure(url, username, password, sink) == OK;
+}
+
+HttpDownloader::DownloadError HttpDownloader::fetchBounded(const std::string& url, const uint32_t budgetMs,
+                                                           const size_t maxBytes, const DataCallback& onData) {
+  // No URL logging here: unattended callers may use a link that carries a secret path.
+  Sink sink;
+  sink.write = onData;
+  sink.maxBytes = maxBytes;
+  sink.timeoutMs = static_cast<int>(std::min<uint32_t>(budgetMs, HTTP_TIMEOUT_MS));
+  sink.hasDeadline = true;
+  sink.deadlineMs = millis() + budgetMs;
+  return runGetSecure(url, "", "", sink);
 }
 
 bool HttpDownloader::fetchGithubReleaseAsset(const std::string& url, const std::string& expectedSha256,

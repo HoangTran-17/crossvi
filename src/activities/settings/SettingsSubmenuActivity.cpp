@@ -203,6 +203,7 @@ void SettingsSubmenuActivity::rebuildSettings() {
                                                 sleepCalendarLayoutLabels()));
           settings_.push_back(SettingInfo::Enum(StrId::STR_SLEEP_REFRESH, &CrossPointSettings::sleepRefreshTime,
                                                 sleepRefreshTimeLabels()));
+          settings_.push_back(SettingInfo::Toggle(StrId::STR_SLEEP_BRIEF_FETCH, &CrossPointSettings::sleepBriefFetch));
         }
       }
       break;

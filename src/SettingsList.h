@@ -302,6 +302,8 @@ const std::vector<SettingInfo>& getBaseSettingsList() {
                           sleepCalendarLayoutLabels(), "sleepCalendarLayout", StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_SLEEP_REFRESH, &CrossPointSettings::sleepRefreshTime, sleepRefreshTimeLabels(),
                           "sleepRefreshTime", StrId::STR_CAT_DISPLAY),
+        SettingInfo::Toggle(StrId::STR_SLEEP_BRIEF_FETCH, &CrossPointSettings::sleepBriefFetch, "sleepBriefFetch",
+                            StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_SLEEP_GHOSTING_TREATMENT, &CrossPointSettings::sleepGhostingTreatment,
                           sleepGhostingTreatmentLabels(), "sleepGhostingTreatment", StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(

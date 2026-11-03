@@ -452,6 +452,8 @@ class CrossPointSettings {
   uint8_t sleepCalendarLayout = CALENDAR_LAYOUT_FULL;
   // Daily timer wake that redraws the lunar calendar sleep screen.
   uint8_t sleepRefreshTime = SLEEP_REFRESH_OFF;
+  // Downloads brief.json over saved Wi-Fi during the daily timer wake (Brief layout only).
+  uint8_t sleepBriefFetch = 0;
   // Status bar settings (statusBar retained for migration only)
   uint8_t statusBar = FULL;
   uint8_t statusBarChapterPageCount = 1;

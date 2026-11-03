@@ -241,3 +241,33 @@ TEST(TetCountdown, OutOfRangeDates) {
   EXPECT_FALSE(tetStatus(2199, 12, 31, s));  // next Tết is beyond the library range
   EXPECT_FALSE(tetStatus(2026, 2, 30, s));
 }
+
+TEST(BriefAge, FreshAndStaleLabels) {
+  Brief brief;
+  ASSERT_EQ(parse(FULL_JSON, brief), ParseStatus::Ok);  // generated 2026-11-03
+  EXPECT_EQ(generatedAgeDays(brief, 2026, 11, 3), 0);
+  EXPECT_EQ(updatedLabel(brief, 2026, 11, 3), "Cập nhật 05:00 03/11");
+  EXPECT_EQ(updatedLabel(brief, 2026, 11, 4), "Cập nhật 05:00 03/11");  // one day old is still fresh
+  EXPECT_EQ(generatedAgeDays(brief, 2026, 11, 5), 2);
+  EXPECT_EQ(updatedLabel(brief, 2026, 11, 5), "Cập nhật 2 ngày trước - 05:00 03/11");
+}
+
+TEST(BriefAge, CrossesMonthYearAndLeapDay) {
+  Brief brief;
+  ASSERT_EQ(parse(R"({"v":1,"generated":"2023-12-30T05:00:00+07:00"})", brief), ParseStatus::Ok);
+  EXPECT_EQ(generatedAgeDays(brief, 2024, 1, 2), 3);
+  ASSERT_EQ(parse(R"({"v":1,"generated":"2024-02-28T05:00:00+07:00"})", brief), ParseStatus::Ok);
+  EXPECT_EQ(generatedAgeDays(brief, 2024, 3, 1), 2);  // 2024 is a leap year
+  ASSERT_EQ(parse(R"({"v":1,"generated":"2025-02-28T05:00:00+07:00"})", brief), ParseStatus::Ok);
+  EXPECT_EQ(generatedAgeDays(brief, 2025, 3, 1), 1);
+}
+
+TEST(BriefAge, UnknownOrFutureGeneratedHasNoAge) {
+  Brief brief;
+  ASSERT_EQ(parse(R"({"v":1})", brief), ParseStatus::Ok);
+  EXPECT_EQ(generatedAgeDays(brief, 2026, 11, 3), -1);
+  EXPECT_TRUE(updatedLabel(brief, 2026, 11, 3).empty());
+  ASSERT_EQ(parse(FULL_JSON, brief), ParseStatus::Ok);
+  EXPECT_EQ(generatedAgeDays(brief, 2026, 11, 2), -1);  // clock earlier than generated
+  EXPECT_EQ(updatedLabel(brief, 2026, 11, 2), "Cập nhật 05:00 03/11");
+}

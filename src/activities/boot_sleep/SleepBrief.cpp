@@ -4,6 +4,7 @@
 #include <LunarCalendar.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 
@@ -52,7 +53,7 @@ bool isDigits(const char* text, const size_t count) {
 
 // "2026-11-03T05:00:00+07:00" -> "05:00 03/11". The generator already wrote
 // local time, so the offset is ignored rather than converted.
-std::string formatUpdated(JsonVariantConst value) {
+std::string formatUpdated(JsonVariantConst value, Brief& brief) {
   if (!value.is<const char*>()) return {};
   const char* s = value.as<const char*>();
   if (std::strlen(s) < 16) return {};
@@ -60,14 +61,28 @@ std::string formatUpdated(JsonVariantConst value) {
       (s[10] != 'T' && s[10] != ' ') || !isDigits(s + 11, 2) || s[13] != ':' || !isDigits(s + 14, 2)) {
     return {};
   }
+  const int year = (s[0] - '0') * 1000 + (s[1] - '0') * 100 + (s[2] - '0') * 10 + (s[3] - '0');
   const int month = (s[5] - '0') * 10 + (s[6] - '0');
   const int day = (s[8] - '0') * 10 + (s[9] - '0');
   const int hour = (s[11] - '0') * 10 + (s[12] - '0');
   const int minute = (s[14] - '0') * 10 + (s[15] - '0');
   if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) return {};
+  brief.generatedYear = year;
+  brief.generatedMonth = month;
+  brief.generatedDay = day;
   char out[16];
   snprintf(out, sizeof(out), "%02d:%02d %02d/%02d", hour, minute, day, month);
   return out;
+}
+
+// Days since 1970-01-01 of a proleptic Gregorian date.
+int64_t daysFromCivil(int64_t year, const int month, const int day) {
+  year -= month <= 2;
+  const int64_t era = (year >= 0 ? year : year - 399) / 400;
+  const int64_t yearOfEra = year - era * 400;
+  const int64_t dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+  const int64_t dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
+  return era * 146097 + dayOfEra - 719468;
 }
 
 struct BuiltinQuote {
@@ -145,7 +160,7 @@ ParseStatus parseBrief(const char* json, const size_t length, Brief& out) {
   const JsonVariantConst root = doc.as<JsonVariantConst>();
   if (!root["v"].is<int>() || root["v"].as<int>() != 1) return ParseStatus::UnsupportedVersion;
 
-  out.updated = formatUpdated(root["generated"]);
+  out.updated = formatUpdated(root["generated"], out);
 
   for (JsonVariantConst item : root["weather"].as<JsonArrayConst>()) {
     if (out.weather.size() == MAX_WEATHER) break;
@@ -185,6 +200,20 @@ ParseStatus parseBrief(const char* json, const size_t length, Brief& out) {
     out.hasQuote = true;
   }
   return ParseStatus::Ok;
+}
+
+int generatedAgeDays(const Brief& brief, const int year, const int month, const int day) {
+  if (brief.generatedYear == 0) return -1;
+  const int64_t age =
+      daysFromCivil(year, month, day) - daysFromCivil(brief.generatedYear, brief.generatedMonth, brief.generatedDay);
+  return age < 0 || age > 36500 ? -1 : static_cast<int>(age);
+}
+
+std::string updatedLabel(const Brief& brief, const int year, const int month, const int day) {
+  if (brief.updated.empty()) return {};
+  const int age = generatedAgeDays(brief, year, month, day);
+  if (age < 2) return "Cập nhật " + brief.updated;
+  return "Cập nhật " + std::to_string(age) + " ngày trước - " + brief.updated;
 }
 
 bool pickQuoteFromText(const char* text, size_t length, const uint32_t dayOfYear, Quote& out) {

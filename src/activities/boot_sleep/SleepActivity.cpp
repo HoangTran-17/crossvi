@@ -32,6 +32,7 @@
 #include "Memory.h"
 #include "RecentBooksStore.h"
 #include "SleepBrief.h"
+#include "SleepBriefFetch.h"
 #include "SleepFrameStore.h"
 #include "SleepImagePlacement.h"
 #include "SleepImageSelectionStore.h"
@@ -1230,7 +1231,7 @@ void drawTearOffLunarLayout(const GfxRenderer& renderer, const Rect& area, const
   }
 }
 
-constexpr char BRIEF_PATH[] = "/.crosspoint/brief.json";
+constexpr const char* BRIEF_PATH = sleep_brief_fetch::BRIEF_PATH;
 constexpr char QUOTES_PATH[] = "/quotes.txt";
 constexpr size_t MAX_QUOTES_FILE_BYTES = 32 * 1024;
 constexpr char ELLIPSIS[] = "\xE2\x80\xA6";
@@ -1429,7 +1430,9 @@ void drawBriefFamilyLayout(const GfxRenderer& renderer, const Rect& content, con
   y += ui10Line + gap;
 
   // Footer is anchored to the bottom; the quote takes whatever height is left.
-  const bool showUpdated = blocks && !blocks->updated.empty();
+  const std::string updatedText =
+      blocks ? sleep_brief::updatedLabel(*blocks, now.date.year, now.date.month, now.date.day) : std::string();
+  const bool showUpdated = !updatedText.empty();
   const int updatedHeight = showUpdated ? smallLine + 6 : 0;
   const int statsHeight = statCellHeight(renderer, UI_12_FONT_ID);
   const int statsTop = bottom - updatedHeight - statsHeight;
@@ -1532,9 +1535,7 @@ void drawBriefFamilyLayout(const GfxRenderer& renderer, const Rect& content, con
     }
   }
   if (showUpdated) {
-    char updated[40];
-    snprintf(updated, sizeof(updated), "Cập nhật %s", blocks->updated.c_str());
-    drawCenteredFittedLine(renderer, content, bottom - smallLine, updated, {SMALL_FONT_ID});
+    drawCenteredFittedLine(renderer, content, bottom - smallLine, updatedText.c_str(), {SMALL_FONT_ID});
   }
 }
 }  // namespace

@@ -582,6 +582,27 @@ TEST(SettingsJsonIntegration, PersistsAndClampsSleepRefreshTime) {
   EXPECT_EQ(SETTINGS.sleepRefreshTime, CrossPointSettings::SLEEP_REFRESH_0600);
 }
 
+TEST(SettingsJsonIntegration, PersistsSleepBriefFetchToggleOffByDefault) {
+  resetFakes();
+  EXPECT_EQ(SETTINGS.sleepBriefFetch, 0);
+  for (const uint8_t value : {1, 0}) {
+    SETTINGS.sleepBriefFetch = value;
+    ASSERT_TRUE(JsonSettingsIO::saveSettings(SETTINGS, SETTINGS_JSON));
+    SETTINGS.sleepBriefFetch = 1 - value;
+    bool needsResave = false;
+    ASSERT_TRUE(
+        JsonSettingsIO::loadSettings(SETTINGS, LegacySettingsTestSupport::lastSavedJson().c_str(), &needsResave));
+    EXPECT_EQ(SETTINGS.sleepBriefFetch, value);
+  }
+
+  // A file written before this setting existed keeps the current value.
+  bool needsResave = false;
+  SETTINGS.sleepBriefFetch = 1;
+  ASSERT_TRUE(
+      JsonSettingsIO::loadSettings(SETTINGS, R"({"statusBarChapterPageCount":1,"sleepScreen":11})", &needsResave));
+  EXPECT_EQ(SETTINGS.sleepBriefFetch, 1);
+}
+
 TEST(SettingsJsonIntegration, PersistsAndClampsSleepImageTransform) {
   resetFakes();
   SETTINGS.sleepScreenImageZoom = 175;

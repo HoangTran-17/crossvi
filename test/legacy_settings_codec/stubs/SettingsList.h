@@ -54,6 +54,7 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                     CrossPointSettings::SLEEP_CALENDAR_LAYOUT_COUNT),
       statusSetting("sleepRefreshTime", &CrossPointSettings::sleepRefreshTime, SettingType::ENUM,
                     CrossPointSettings::SLEEP_REFRESH_TIME_COUNT),
+      statusSetting("sleepBriefFetch", &CrossPointSettings::sleepBriefFetch, SettingType::TOGGLE),
       statusSetting("readerDarkMode", &CrossPointSettings::readerDarkMode, SettingType::TOGGLE),
   };
   return settings;
