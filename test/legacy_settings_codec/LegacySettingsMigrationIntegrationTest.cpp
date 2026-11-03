@@ -532,13 +532,26 @@ TEST(SettingsJsonIntegration, PersistsAndClampsSleepCalendarLayout) {
   ASSERT_TRUE(JsonSettingsIO::loadSettings(SETTINGS, LegacySettingsTestSupport::lastSavedJson().c_str(), &needsResave));
   EXPECT_EQ(SETTINGS.sleepCalendarLayout, CrossPointSettings::CALENDAR_LAYOUT_TEAR_OFF);
 
+  // The brief presets extend the same key; existing values keep their numbers.
+  static_assert(CrossPointSettings::CALENDAR_LAYOUT_READING == 3);
+  for (const uint8_t layout :
+       {CrossPointSettings::CALENDAR_LAYOUT_BRIEF, CrossPointSettings::CALENDAR_LAYOUT_DAILY_REVIEW}) {
+    SETTINGS.sleepCalendarLayout = layout;
+    ASSERT_TRUE(JsonSettingsIO::saveSettings(SETTINGS, SETTINGS_JSON));
+    SETTINGS.sleepCalendarLayout = CrossPointSettings::CALENDAR_LAYOUT_FULL;
+    ASSERT_TRUE(
+        JsonSettingsIO::loadSettings(SETTINGS, LegacySettingsTestSupport::lastSavedJson().c_str(), &needsResave));
+    EXPECT_EQ(SETTINGS.sleepCalendarLayout, layout);
+  }
+  EXPECT_EQ(CrossPointSettings::SLEEP_CALENDAR_LAYOUT_COUNT, 6);
+
   // Settings written before the layout existed keep the original full layout.
   SETTINGS.sleepCalendarLayout = CrossPointSettings::CALENDAR_LAYOUT_FULL;
   ASSERT_TRUE(
       JsonSettingsIO::loadSettings(SETTINGS, R"({"statusBarChapterPageCount":1,"sleepScreen":11})", &needsResave));
   EXPECT_EQ(SETTINGS.sleepCalendarLayout, CrossPointSettings::CALENDAR_LAYOUT_FULL);
 
-  ASSERT_TRUE(JsonSettingsIO::loadSettings(SETTINGS, R"({"statusBarChapterPageCount":1,"sleepCalendarLayout":9})",
+  ASSERT_TRUE(JsonSettingsIO::loadSettings(SETTINGS, R"({"statusBarChapterPageCount":1,"sleepCalendarLayout":6})",
                                            &needsResave));
   EXPECT_EQ(SETTINGS.sleepCalendarLayout, CrossPointSettings::CALENDAR_LAYOUT_FULL);
 }

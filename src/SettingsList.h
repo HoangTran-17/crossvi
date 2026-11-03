@@ -61,8 +61,9 @@ inline std::vector<StrId> sleepGhostingTreatmentLabels() {
 }
 
 inline std::vector<StrId> sleepCalendarLayoutLabels() {
-  return {StrId::STR_CALENDAR_LAYOUT_FULL, StrId::STR_CALENDAR_LAYOUT_MINIMAL, StrId::STR_CALENDAR_LAYOUT_TEAR_OFF,
-          StrId::STR_CALENDAR_LAYOUT_READING};
+  return {StrId::STR_CALENDAR_LAYOUT_FULL,     StrId::STR_CALENDAR_LAYOUT_MINIMAL,
+          StrId::STR_CALENDAR_LAYOUT_TEAR_OFF, StrId::STR_CALENDAR_LAYOUT_READING,
+          StrId::STR_CALENDAR_LAYOUT_BRIEF,    StrId::STR_CALENDAR_LAYOUT_DAILY_REVIEW};
 }
 
 inline SettingInfo buildScreenMarginSetting() {

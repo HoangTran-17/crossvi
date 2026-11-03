@@ -24,12 +24,14 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "Epub/converters/DitherUtils.h"
 #include "Memory.h"
 #include "RecentBooksStore.h"
+#include "SleepBrief.h"
 #include "SleepFrameStore.h"
 #include "SleepImagePlacement.h"
 #include "SleepImageSelectionStore.h"
@@ -47,6 +49,7 @@
 #include "activities/reader/ReadingCalendarRenderer.h"
 #include "activities/reader/ReadingStatsPresentation.h"
 #include "activities/reader/ReadingStatsUtils.h"
+#include "clippings/ClippingStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/DefaultSleepScreens.h"
@@ -1226,6 +1229,314 @@ void drawTearOffLunarLayout(const GfxRenderer& renderer, const Rect& area, const
     drawCenteredFittedLine(renderer, cell, cell.y, label, {UI_10_FONT_ID, SMALL_FONT_ID});
   }
 }
+
+constexpr char BRIEF_PATH[] = "/.crosspoint/brief.json";
+constexpr char QUOTES_PATH[] = "/quotes.txt";
+constexpr size_t MAX_QUOTES_FILE_BYTES = 32 * 1024;
+constexpr char ELLIPSIS[] = "\xE2\x80\xA6";
+
+struct BriefFooterInfo {
+  bool streakKnown = false;
+  uint16_t streak = 0;
+  bool tetKnown = false;
+  sleep_brief::TetStatus tet;
+};
+
+// A missing or rejected file is the normal "no network yet" state, not an error.
+bool loadBrief(sleep_brief::Brief& brief) {
+  if (!Storage.exists(BRIEF_PATH)) return false;
+  auto buffer = makeUniqueNoThrow<char[]>(sleep_brief::MAX_BRIEF_BYTES + 2);
+  if (!buffer) return false;
+  // One byte past the cap is read on purpose so an oversize file is detected.
+  const size_t length = Storage.readFileToBuffer(BRIEF_PATH, buffer.get(), sleep_brief::MAX_BRIEF_BYTES + 2);
+  const sleep_brief::ParseStatus status = sleep_brief::parseBrief(buffer.get(), length, brief);
+  if (status != sleep_brief::ParseStatus::Ok) {
+    LOG_ERR("SLP", "brief.json rejected: status=%u", static_cast<unsigned>(status));
+    brief = sleep_brief::Brief{};
+    return false;
+  }
+  return true;
+}
+
+sleep_brief::Quote loadQuoteOfTheDay(const sleep_brief::Brief* brief, const uint32_t dayOfYear) {
+  if (brief && brief->hasQuote) return brief->quote;
+  sleep_brief::Quote quote;
+  if (Storage.exists(QUOTES_PATH)) {
+    auto buffer = makeUniqueNoThrow<char[]>(MAX_QUOTES_FILE_BYTES + 1);
+    if (buffer) {
+      const size_t length = Storage.readFileToBuffer(QUOTES_PATH, buffer.get(), MAX_QUOTES_FILE_BYTES + 1);
+      if (sleep_brief::pickQuoteFromText(buffer.get(), length, dayOfYear, quote)) return quote;
+    }
+  }
+  return sleep_brief::builtinQuote(dayOfYear);
+}
+
+// Read-only: only current-format stores in the Loaded state are touched, so no
+// recovery or migration write can happen while the device is going to sleep.
+bool loadHighlightOfTheDay(const uint32_t dayOfYear, sleep_brief::Quote& out) {
+  auto catalog = makeUniqueNoThrow<ClippingStore::Catalog>();
+  if (!catalog || ClippingStore::loadCatalog(*catalog) != ClippingStore::CatalogLoadResult::Loaded) return false;
+  uint32_t total = 0;
+  for (const auto& entry : catalog->entries) {
+    if (entry.format == ClippingCodec::Format::Current) total += entry.clippingCount;
+  }
+  if (total == 0) return false;
+  uint32_t ordinal = (dayOfYear * 2654435761u) % total;
+  for (const auto& entry : catalog->entries) {
+    if (entry.format != ClippingCodec::Format::Current) continue;
+    if (ordinal >= entry.clippingCount) {
+      ordinal -= entry.clippingCount;
+      continue;
+    }
+    auto store = makeUniqueNoThrow<ClippingStore>();
+    if (!store || store->loadForBook(entry.book.path, entry.book.title, entry.book.author, entry.book.bookType) !=
+                      ClippingStore::LoadResult::Loaded) {
+      return false;
+    }
+    std::string text;
+    if (ordinal >= store->size() || !store->readText(ordinal, text) || text.empty()) return false;
+    out.text = std::move(text);
+    out.by = entry.book.title;
+    return true;
+  }
+  return false;
+}
+
+BriefFooterInfo loadBriefFooterInfo(const ReadingStatsDateTime& now) {
+  BriefFooterInfo info;
+  GlobalReadingStats::LoadStatus status = GlobalReadingStats::LoadStatus::Missing;
+  const GlobalReadingStats stats = GlobalReadingStats::load(&status);
+  if (GlobalReadingStats::isTrustedLoadStatus(status)) {
+    info.streakKnown = true;
+    info.streak = stats.currentReadingStreak(&now.date);
+  }
+  info.tetKnown = sleep_brief::tetStatus(now.date.year, now.date.month, now.date.day, info.tet);
+  return info;
+}
+
+bool endsWithEllipsis(const std::string& text) {
+  return text.size() >= 3 && text.compare(text.size() - 3, 3, ELLIPSIS) == 0;
+}
+
+// Wraps the quote in the largest font whose wrapped text fits the area (the
+// smallest font truncates), then centers it with the author line below.
+void drawQuoteBlock(const GfxRenderer& renderer, const Rect& area, const sleep_brief::Quote& quote,
+                    std::initializer_list<int> fonts) {
+  const int smallLine = renderer.getLineHeight(SMALL_FONT_ID);
+  const int byHeight = quote.by.empty() ? 0 : smallLine + 8;
+  const int textWidth = area.width - 16;
+  if (textWidth < 40) return;
+  std::vector<std::string> lines;
+  int fontId = *(fonts.end() - 1);
+  for (const int candidate : fonts) {
+    const int maxLines = (area.height - byHeight) / renderer.getLineHeight(candidate);
+    if (maxLines < 1) continue;
+    lines = renderer.wrappedText(candidate, quote.text.c_str(), textWidth, maxLines);
+    fontId = candidate;
+    if (lines.empty() || !endsWithEllipsis(lines.back()) || endsWithEllipsis(quote.text)) break;
+  }
+  if (lines.empty()) return;
+  const int lineHeight = renderer.getLineHeight(fontId);
+  const int blockHeight = static_cast<int>(lines.size()) * lineHeight + byHeight;
+  int y = area.y + std::max(0, (area.height - blockHeight) / 2);
+  for (const std::string& line : lines) {
+    drawCenteredInRect(renderer, fontId, area, y, line.c_str());
+    y += lineHeight;
+  }
+  if (!quote.by.empty()) {
+    const std::string by = "— " + quote.by;
+    drawCenteredFittedLine(renderer, Rect{area.x + 8, area.y, textWidth, area.height}, y + 8, by.c_str(),
+                           {SMALL_FONT_ID});
+  }
+}
+
+int statCellHeight(const GfxRenderer& renderer, const int valueFontId) {
+  return renderer.getLineHeight(valueFontId) + renderer.getLineHeight(SMALL_FONT_ID) + 10;
+}
+
+void drawStatCell(const GfxRenderer& renderer, const Rect& rect, const char* value, const char* label,
+                  const int valueFontId) {
+  const Rect inner{rect.x + 4, rect.y, std::max(1, rect.width - 8), rect.height};
+  const int contentHeight = renderer.getLineHeight(valueFontId) + 2 + renderer.getLineHeight(SMALL_FONT_ID);
+  const int top = rect.y + std::max(0, (rect.height - contentHeight) / 2);
+  drawCenteredFittedLine(renderer, inner, top, value[0] ? value : "--", {valueFontId, UI_10_FONT_ID},
+                         EpdFontFamily::BOLD);
+  drawCenteredFittedLine(renderer, inner, top + renderer.getLineHeight(valueFontId) + 2, label, {SMALL_FONT_ID});
+}
+
+// "label value" centered in `rect`, the value bold and baseline-aligned.
+void drawLabelValue(const GfxRenderer& renderer, const Rect& rect, const int y, const char* label, const char* value,
+                    const int valueFontId, const int labelFontId = UI_10_FONT_ID) {
+  const char* shownValue = value[0] ? value : "--";
+  const int labelWidth = renderer.getTextWidth(labelFontId, label);
+  const int valueWidth = renderer.getTextWidth(valueFontId, shownValue, EpdFontFamily::BOLD);
+  const int total = labelWidth + 8 + valueWidth;
+  if (total > rect.width - 8) {
+    drawCenteredFittedLine(renderer, rect, y, shownValue, {valueFontId, UI_10_FONT_ID}, EpdFontFamily::BOLD);
+    return;
+  }
+  const int x = rect.x + (rect.width - total) / 2;
+  const int labelY = y + renderer.getFontAscenderSize(valueFontId) - renderer.getFontAscenderSize(labelFontId);
+  renderer.drawText(labelFontId, x, labelY, label);
+  renderer.drawText(valueFontId, x + labelWidth + 8, y, shownValue, true, EpdFontFamily::BOLD);
+}
+
+int drawSectionHeading(const GfxRenderer& renderer, const Rect& content, const int y, const char* title) {
+  const int line = renderer.getLineHeight(UI_10_FONT_ID);
+  renderer.drawText(UI_10_FONT_ID, content.x, y, title, true, EpdFontFamily::BOLD);
+  renderer.drawLine(content.x, y + line, content.x + content.width - 1, y + line);
+  return y + line + 7;
+}
+
+void drawTruncatedRow(const GfxRenderer& renderer, const int x, const int y, const int width, const char* text,
+                      const EpdFontFamily::Style style = EpdFontFamily::REGULAR) {
+  const std::string shown = renderer.truncatedText(UI_10_FONT_ID, text, std::max(1, width), style);
+  renderer.drawText(UI_10_FONT_ID, x, y, shown.c_str(), true, style);
+}
+
+// Shared by the Brief and Daily review presets. `blocks` is null (or empty of
+// network data) when only the quote and the footer should fill the page.
+void drawBriefFamilyLayout(const GfxRenderer& renderer, const Rect& content, const int statusHeight,
+                           const ReadingStatsDateTime& now, const lunar::DayInfo& day, const sleep_brief::Brief* blocks,
+                           const sleep_brief::Quote& quote, const BriefFooterInfo& footer) {
+  constexpr int gap = LUNAR_SECTION_GAP;
+  const int right = content.x + content.width - 1;
+  const int bottom = content.y + content.height;
+  const int smallLine = renderer.getLineHeight(SMALL_FONT_ID);
+  const int ui10Line = renderer.getLineHeight(UI_10_FONT_ID);
+  const int ui12Line = renderer.getLineHeight(UI_12_FONT_ID);
+
+  char solarDate[40];
+  snprintf(solarDate, sizeof(solarDate), "%s - %02u/%02u/%04u", lunar::weekdayName(day.weekday),
+           static_cast<unsigned>(now.date.day), static_cast<unsigned>(now.date.month),
+           static_cast<unsigned>(now.date.year));
+  renderer.drawText(SMALL_FONT_ID, right + 1 - renderer.getTextWidth(SMALL_FONT_ID, solarDate, EpdFontFamily::BOLD),
+                    content.y, solarDate, true, EpdFontFamily::BOLD);
+  int y = content.y + statusHeight + 6;
+  renderer.drawLine(content.x, y, right, y);
+  y += gap + 4;
+
+  char lunarDate[64];
+  formatLunarDate(day, lunarDate, sizeof(lunarDate));
+  char lunarLine[80];
+  snprintf(lunarLine, sizeof(lunarLine), "Âm lịch %s", lunarDate);
+  drawCenteredFittedLine(renderer, content, y, lunarLine, {UI_12_FONT_ID, UI_10_FONT_ID, SMALL_FONT_ID},
+                         EpdFontFamily::BOLD);
+  y += ui12Line + 4;
+  char canChi[56];
+  formatDayMonthCanChi(day, canChi, sizeof(canChi));
+  drawCenteredFittedLine(renderer, content, y, canChi, {UI_10_FONT_ID, SMALL_FONT_ID});
+  y += ui10Line + gap;
+
+  // Footer is anchored to the bottom; the quote takes whatever height is left.
+  const bool showUpdated = blocks && !blocks->updated.empty();
+  const int updatedHeight = showUpdated ? smallLine + 6 : 0;
+  const int statsHeight = statCellHeight(renderer, UI_12_FONT_ID);
+  const int statsTop = bottom - updatedHeight - statsHeight;
+  const int ruleY = statsTop - gap;
+  const int quoteBottom = ruleY - gap;
+  const bool showBlocks = blocks && blocks->hasNetworkBlocks();
+  // Network blocks give way (in order) before the quote loses its last two lines.
+  const int blockLimit = quoteBottom - (ui10Line * 2 + gap) - gap;
+  const auto fits = [&](const int height) { return y + height <= blockLimit; };
+  const int headingHeight = ui10Line + 7;
+
+  if (showBlocks) {
+    const int rowHeight = ui10Line + 6;
+    if (!blocks->weather.empty() && fits(headingHeight + static_cast<int>(blocks->weather.size()) * rowHeight)) {
+      y = drawSectionHeading(renderer, content, y, "Thời tiết");
+      for (const auto& w : blocks->weather) {
+        const int rangeWidth = renderer.getTextWidth(UI_10_FONT_ID, w.range.c_str(), EpdFontFamily::BOLD);
+        const int cityMax = content.width - rangeWidth - 12;
+        const std::string city = renderer.truncatedText(UI_10_FONT_ID, w.city.c_str(), cityMax, EpdFontFamily::BOLD);
+        renderer.drawText(UI_10_FONT_ID, content.x, y, city.c_str(), true, EpdFontFamily::BOLD);
+        renderer.drawText(UI_10_FONT_ID, right + 1 - rangeWidth, y, w.range.c_str(), true, EpdFontFamily::BOLD);
+        const int nowX = content.x + renderer.getTextWidth(UI_10_FONT_ID, city.c_str(), EpdFontFamily::BOLD) + 12;
+        const int nowWidth = right + 1 - rangeWidth - 12 - nowX;
+        if (nowWidth > 24) drawTruncatedRow(renderer, nowX, y, nowWidth, w.now.c_str());
+        y += rowHeight;
+      }
+      y += gap - 6;
+    }
+    if (blocks->hasGold && fits(headingHeight + ui12Line + ui10Line + 16)) {
+      const auto& g = blocks->gold;
+      const std::string title = g.unit.empty() ? g.name : g.name + " (" + g.unit + ")";
+      y = drawSectionHeading(renderer, content, y, title.c_str());
+      const Rect buy{content.x, y, content.width / 2, ui12Line};
+      const Rect sell{content.x + content.width / 2, y, content.width - content.width / 2, ui12Line};
+      drawLabelValue(renderer, buy, y, "Mua", g.buy.c_str(), UI_12_FONT_ID);
+      drawLabelValue(renderer, sell, y, "Bán", g.sell.c_str(), UI_12_FONT_ID);
+      y += ui12Line + 8;
+      const char* labels[3] = {"1 tháng", "3 tháng", "1 năm"};
+      const std::string* values[3] = {&g.d1m, &g.d3m, &g.d1y};
+      for (int index = 0; index < 3; ++index) {
+        const int x = content.x + content.width * index / 3;
+        const Rect cell{x, y, content.x + content.width * (index + 1) / 3 - x, ui10Line};
+        drawLabelValue(renderer, cell, y, labels[index], values[index]->c_str(), UI_10_FONT_ID, SMALL_FONT_ID);
+      }
+      y += ui10Line + 8 + gap - 6;
+    }
+    if (!blocks->news.empty() && fits(headingHeight + static_cast<int>(blocks->news.size()) * rowHeight)) {
+      y = drawSectionHeading(renderer, content, y, "Tin AI");
+      for (const auto& item : blocks->news) {
+        const std::string line = "- " + item;
+        drawTruncatedRow(renderer, content.x, y, content.width, line.c_str());
+        y += rowHeight;
+      }
+      y += gap - 6;
+    }
+    if (!blocks->events.empty() && fits(headingHeight + static_cast<int>(blocks->events.size()) * rowHeight)) {
+      y = drawSectionHeading(renderer, content, y, "Hôm nay");
+      for (const auto& event : blocks->events) {
+        int textX = content.x;
+        if (!event.time.empty()) {
+          renderer.drawText(UI_10_FONT_ID, content.x, y, event.time.c_str(), true, EpdFontFamily::BOLD);
+          textX += renderer.getTextWidth(UI_10_FONT_ID, "00:00", EpdFontFamily::BOLD) + 12;
+        }
+        drawTruncatedRow(renderer, textX, y, right + 1 - textX, event.text.c_str());
+        y += rowHeight;
+      }
+      y += gap - 6;
+    }
+  }
+
+  const Rect quoteArea{content.x, y, content.width, std::max(0, quoteBottom - y)};
+  if (showBlocks) {
+    drawQuoteBlock(renderer, quoteArea, quote, {UI_12_FONT_ID, UI_10_FONT_ID});
+  } else {
+    drawQuoteBlock(renderer, quoteArea, quote,
+                   {NOTOSERIF_18_FONT_ID, NOTOSERIF_16_FONT_ID, NOTOSERIF_14_FONT_ID, UI_12_FONT_ID, UI_10_FONT_ID});
+  }
+
+  renderer.drawLine(content.x, ruleY, right, ruleY);
+  const int cellCount = (footer.streakKnown ? 1 : 0) + (footer.tetKnown ? 1 : 0);
+  int cellIndex = 0;
+  const auto nextCell = [&]() {
+    const int x = content.x + content.width * cellIndex / cellCount;
+    const Rect cell{x, statsTop, content.x + content.width * (cellIndex + 1) / cellCount - x, statsHeight};
+    ++cellIndex;
+    return cell;
+  };
+  if (footer.streakKnown) {
+    char value[24];
+    snprintf(value, sizeof(value), "%u ngày", static_cast<unsigned>(footer.streak));
+    drawStatCell(renderer, nextCell(), value, "Chuỗi đọc", UI_12_FONT_ID);
+  }
+  if (footer.tetKnown) {
+    char value[24];
+    if (footer.tet.greeting) {
+      drawStatCell(renderer, nextCell(), "Chúc mừng năm mới", "Tết Nguyên Đán", UI_12_FONT_ID);
+    } else {
+      snprintf(value, sizeof(value), "%d ngày", footer.tet.daysUntil);
+      drawStatCell(renderer, nextCell(), value, "Đến Tết Nguyên Đán", UI_12_FONT_ID);
+    }
+  }
+  if (showUpdated) {
+    char updated[40];
+    snprintf(updated, sizeof(updated), "Cập nhật %s", blocks->updated.c_str());
+    drawCenteredFittedLine(renderer, content, bottom - smallLine, updated, {SMALL_FONT_ID});
+  }
+}
 }  // namespace
 
 // Lunar terms are Vietnamese by nature and the lunar library names are
@@ -1257,6 +1568,22 @@ void SleepActivity::renderLunarCalendarSleepScreen() {
   GUI.drawBatteryLeft(renderer, Rect{content.x, content.y, metrics.batteryWidth, metrics.batteryHeight},
                       powerManager.getBatteryPercentage(),
                       SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS);
+  if (layout == CrossPointSettings::CALENDAR_LAYOUT_BRIEF ||
+      layout == CrossPointSettings::CALENDAR_LAYOUT_DAILY_REVIEW) {
+    const bool isBrief = layout == CrossPointSettings::CALENDAR_LAYOUT_BRIEF;
+    const uint32_t dayOfYear = sleep_brief::dayOfYear(now.date.year, now.date.month, now.date.day);
+    auto brief = makeUniqueNoThrow<sleep_brief::Brief>();
+    const bool haveBrief = brief && loadBrief(*brief);
+    // Daily review shows a saved highlight on odd days and the quote otherwise.
+    sleep_brief::Quote quote;
+    const bool highlight = !isBrief && (dayOfYear % 2 == 1) && loadHighlightOfTheDay(dayOfYear, quote);
+    if (!highlight) quote = loadQuoteOfTheDay(haveBrief ? brief.get() : nullptr, dayOfYear);
+    const BriefFooterInfo footer = loadBriefFooterInfo(now);
+    drawBriefFamilyLayout(renderer, content, std::max(smallLine, metrics.batteryHeight + 6), now, day,
+                          isBrief && haveBrief ? brief.get() : nullptr, quote, footer);
+    displayStrongSleepFrame();
+    return;
+  }
   if (layout == CrossPointSettings::CALENDAR_LAYOUT_MINIMAL || layout == CrossPointSettings::CALENDAR_LAYOUT_TEAR_OFF) {
     // These layouts carry no reading stats, so the stats files stay unread.
     const int top = content.y + metrics.batteryHeight + sectionGap;
