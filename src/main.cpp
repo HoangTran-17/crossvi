@@ -25,8 +25,12 @@
 #include <esp_ota_ops.h>
 #include <esp_sleep.h>
 #include <esp_system.h>
+#ifndef SIMULATOR
+#include <esp_timer.h>
+#endif
 #endif
 
+#include <cstdlib>
 #include <cstring>
 
 #include "CrossPointSettings.h"
@@ -39,7 +43,10 @@
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/boot_sleep/SafeBootActivity.h"
+#include "activities/boot_sleep/SleepActivity.h"
 #include "activities/boot_sleep/SleepFrameStore.h"
+#include "activities/boot_sleep/SleepRefreshSchedule.h"
+#include "activities/reader/ReadingStatsUtils.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -225,6 +232,32 @@ static void drawBundledDefaultSleepScreen() {
   }
 }
 
+static_assert(sleep_refresh::SETTING_COUNT == CrossPointSettings::SLEEP_REFRESH_TIME_COUNT);
+
+// RTC_NOINIT survives the reset after a crash. A timer wake sets it and clears it right before sleeping again, so a
+// set value on a later boot means the previous timer wake did not finish.
+RTC_NOINIT_ATTR static uint32_t timerWakeGuard;
+constexpr uint32_t TIMER_WAKE_GUARD_MAGIC = 0x71A3E5C1;
+
+static bool sleepRefreshInputs(sleep_refresh::Inputs& inputs) {
+  ReadingStatsDateTime now{};
+  if (!getCurrentLocalReadingStatsDateTime(now)) return false;
+  const bool lunarScreen =
+      SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::LUNAR_CALENDAR &&
+      SETTINGS.quickResumeSleepScreen != CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
+  const uint16_t battery = powerManager.getBatteryPercentage();
+  inputs = {SETTINGS.sleepRefreshTime, lunarScreen, now.date.year,
+            static_cast<uint32_t>(now.hour) * 3600 + static_cast<uint32_t>(now.minute) * 60 + now.second,
+            static_cast<uint8_t>(battery > 100 ? 100 : battery)};
+  return true;
+}
+
+// Seconds until the next scheduled sleep screen refresh, or 0 when no timer may be armed.
+static uint32_t sleepRefreshTimerSeconds() {
+  sleep_refresh::Inputs inputs{};
+  return sleepRefreshInputs(inputs) ? sleep_refresh::secondsToNextRefresh(inputs) : 0;
+}
+
 // Some wake checks intentionally return to deep sleep before the activity and
 // font systems are initialized. Even those early exits must leave the panel in
 // a clean, powered-down state instead of cutting power behind a stale frame.
@@ -247,7 +280,7 @@ void enterStartupDeepSleep(const bool tryRestoreSleepFrame) {
   display.triggerDisplay(HalDisplay::FULL_REFRESH, TURN_OFF_SCREEN_AFTER_REFRESH);
   display.deepSleep();
   LOG_INF("SLW", "startup-sleep panel parked elapsed_ms=%lu", millis() - startedAt);
-  powerManager.startDeepSleep(gpio);
+  powerManager.startDeepSleep(gpio, sleepRefreshTimerSeconds());
 }
 
 // Enter deep sleep mode
@@ -314,13 +347,15 @@ void enterDeepSleep() {
   mirrorWakeShortPressToNvs();
   LOG_INF("SLW", "deep-sleep entry total_elapsed_ms=%lu", millis() - sleepStartedAt);
 
-  powerManager.startDeepSleep(gpio);
+  const uint32_t refreshSeconds = sleepRefreshTimerSeconds();
+  LOG_INF("SLW", "sleep refresh timer seconds=%lu", static_cast<unsigned long>(refreshSeconds));
+  powerManager.startDeepSleep(gpio, refreshSeconds);
 }
 
-void setupDisplayAndFonts(bool seamless = false) {
+void setupDisplayAndFonts(bool seamless = false, bool withActivityManager = true) {
   display.begin(seamless);
   renderer.begin();
-  activityManager.begin();
+  if (withActivityManager) activityManager.begin();
   LOG_DBG("MAIN", "Display initialized");
 
   // Initialize font decompressor for compressed reader fonts
@@ -343,6 +378,99 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.insertFont(SLEEP_DIGITS_88_FONT_ID, sleepDigits88FontFamily);
 
   LOG_DBG("MAIN", "Built-in fonts setup");
+}
+
+// Runs after storage and settings are ready and before a timer wake draws the sleep screen. Data that the sleep
+// screen shows and that needs refreshing each day is brought up to date here.
+static void refreshSleepScreenData() {}
+
+[[noreturn]] static void sleepUntilNextRefresh(const uint32_t seconds) {
+  timerWakeGuard = 0;
+  mirrorWakeShortPressToNvs();
+  powerManager.startDeepSleep(gpio, seconds);
+#ifdef SIMULATOR
+  // The simulator's deep sleep returns only when it was asked to quit. Skip static destructors: the
+  // ActivityManager one asserts.
+  std::fflush(nullptr);
+  std::_Exit(0);
+#else
+  while (true) delay(1000);
+#endif
+}
+
+// Any failure on a timer wake ends here: power button wakeup only, no timer.
+[[noreturn]] static void sleepWithPowerButtonOnly(const bool panelAwake) {
+  if (panelAwake) display.deepSleep();
+  sleepUntilNextRefresh(0);
+}
+
+#ifndef SIMULATOR
+// A timer wake must never keep the device awake. If a step hangs, this cuts it off.
+static void armTimerWakeDeadman() {
+  constexpr uint64_t TIMER_WAKE_DEADLINE_US = 90ULL * 1000 * 1000;
+  esp_timer_create_args_t args = {};
+  args.callback = [](void*) {
+    timerWakeGuard = 0;
+    powerManager.startDeepSleep(gpio);
+  };
+  args.dispatch_method = ESP_TIMER_TASK;
+  args.name = "timerWakeDeadman";
+  args.skip_unhandled_events = true;
+  esp_timer_handle_t handle = nullptr;
+  if (esp_timer_create(&args, &handle) == ESP_OK) esp_timer_start_once(handle, TIMER_WAKE_DEADLINE_US);
+}
+#else
+static void armTimerWakeDeadman() {}
+#endif
+
+// Minimal boot for an RTC timer wake: no boot logo, no activities, no Wi-Fi. Draws the sleep screen once and goes
+// back to deep sleep. Every exit is a deep sleep.
+[[noreturn]] static void runTimerWake() {
+  timerWakeGuard = TIMER_WAKE_GUARD_MAGIC;
+  armTimerWakeDeadman();
+
+  if (!Storage.begin()) {
+    LOG_ERR("SLW", "timer wake: SD mount failed");
+    sleepWithPowerButtonOnly(false);
+  }
+  SETTINGS.loadFromFile();
+  APP_STATE.loadFromFile();
+  I18N.setLanguage(static_cast<Language>(SETTINGS.language));
+
+  sleep_refresh::Inputs inputs{};
+  if (!sleepRefreshInputs(inputs)) {
+    LOG_ERR("SLW", "timer wake: clock invalid");
+    sleepWithPowerButtonOnly(false);
+  }
+  const sleep_refresh::WakePlan plan = sleep_refresh::planTimerWake(inputs);
+  LOG_INF("SLW", "timer wake action=%u second_of_day=%lu sleep_s=%lu", static_cast<unsigned>(plan.action),
+          static_cast<unsigned long>(inputs.secondOfDay), static_cast<unsigned long>(plan.sleepSeconds));
+  if (plan.action == sleep_refresh::WakeAction::GpioOnly) sleepWithPowerButtonOnly(false);
+  if (plan.action == sleep_refresh::WakeAction::SleepOnly) sleepUntilNextRefresh(plan.sleepSeconds);
+
+  refreshSleepScreenData();
+  setupDisplayAndFonts(false, false);
+  {
+    SleepActivity sleepScreen(renderer, mappedInputManager);
+    sleepScreen.renderScheduledLunarRefresh();
+  }
+
+  bool savedFrame = false;
+  {
+    RenderLock lock;
+    savedFrame = SleepFrameStore::save(renderer);
+    APP_STATE.showBootScreen = !savedFrame;
+    if (!APP_STATE.saveToFile()) {
+      SleepFrameStore::discard();
+      APP_STATE.showBootScreen = true;
+    }
+  }
+  LOG_INF("SLW", "timer wake sleep screen drawn frame_saved=%u", static_cast<unsigned>(savedFrame));
+
+  halTiltSensor.deepSleep();
+  display.deepSleep();
+  if (!sleepRefreshInputs(inputs)) sleepUntilNextRefresh(0);
+  sleepUntilNextRefresh(sleep_refresh::secondsAfterRefresh(inputs));
 }
 
 void setup() {
@@ -392,6 +520,11 @@ void setup() {
 
   const auto wakeupReason = gpio.getWakeupReason();
   LOG_INF("SLW", "wake logical_reason=%u", static_cast<unsigned>(wakeupReason));
+  if (timerWakeGuard == TIMER_WAKE_GUARD_MAGIC) {
+    LOG_ERR("SLW", "previous timer wake did not finish; sleeping on the power button only");
+    sleepUntilNextRefresh(0);
+  }
+  if (wakeupReason == HalGPIO::WakeupReason::Timer) runTimerWake();
   bool recoveryFirmwareMode = false;
   bool manualSafeBoot = false;
   if (wakeupReason == HalGPIO::WakeupReason::PowerButton) {
@@ -483,6 +616,7 @@ void setup() {
       LOG_DBG("MAIN", "Wakeup reason: After USB Power");
       enterStartupDeepSleep(false);
       return;
+    case HalGPIO::WakeupReason::Timer:  // handled by runTimerWake() before this point
     case HalGPIO::WakeupReason::PowerButton:
     case HalGPIO::WakeupReason::AfterFlash:
       // After flashing, just proceed to boot

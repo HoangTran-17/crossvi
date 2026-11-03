@@ -577,7 +577,7 @@ class CodegenTest(unittest.TestCase):
         self.assertIn(
             "display.triggerDisplay(HalDisplay::FULL_REFRESH, TURN_OFF_SCREEN_AFTER_REFRESH);", helper
         )
-        self.assertLess(helper.index("display.deepSleep();"), helper.index("powerManager.startDeepSleep(gpio);"))
+        self.assertLess(helper.index("display.deepSleep();"), helper.index("powerManager.startDeepSleep(gpio, sleepRefreshTimerSeconds());"))
         self.assertIn("enterStartupDeepSleep(true);", main)
         self.assertIn("enterStartupDeepSleep(false);", main)
 
@@ -590,7 +590,8 @@ class CodegenTest(unittest.TestCase):
         main = (REPO_ROOT / "src/main.cpp").read_text(encoding="utf-8")
         settings = (REPO_ROOT / "src/CrossPointSettings.h").read_text(encoding="utf-8")
 
-        self.assertLess(main.index("gpio.verifyPowerButtonWakeup("), main.index("Storage.begin()"))
+        setup_start = main.index("void setup()")
+        self.assertLess(main.index("gpio.verifyPowerButtonWakeup("), main.index("Storage.begin()", setup_start))
         self.assertIn("readWakeShortPressFromNvs()", main)
         self.assertIn("const bool shortPressWakes = gpio.deviceIsX3() || readWakeShortPressFromNvs();", main)
         self.assertGreaterEqual(main.count("mirrorWakeShortPressToNvs();"), 2)
@@ -3613,6 +3614,8 @@ class CodegenTest(unittest.TestCase):
         self.assertIn("sleepCalendarLayoutLabels()", submenu)
         self.assertIn("StrId::STR_CALENDAR_LAYOUT_BRIEF", settings)
         self.assertIn("StrId::STR_CALENDAR_LAYOUT_DAILY_REVIEW", settings)
+        self.assertIn('"sleepRefreshTime"', settings)
+        self.assertIn("sleepRefreshTimeLabels()", submenu)
 
     def test_settings_hide_inapplicable_choices_and_defer_dictionary_scan(self):
         settings = (REPO_ROOT / "src/SettingsList.h").read_text(encoding="utf-8")

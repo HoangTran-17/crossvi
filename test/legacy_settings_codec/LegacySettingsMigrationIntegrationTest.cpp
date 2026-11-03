@@ -556,6 +556,32 @@ TEST(SettingsJsonIntegration, PersistsAndClampsSleepCalendarLayout) {
   EXPECT_EQ(SETTINGS.sleepCalendarLayout, CrossPointSettings::CALENDAR_LAYOUT_FULL);
 }
 
+TEST(SettingsJsonIntegration, PersistsAndClampsSleepRefreshTime) {
+  resetFakes();
+  EXPECT_EQ(SETTINGS.sleepRefreshTime, CrossPointSettings::SLEEP_REFRESH_OFF);
+  for (uint8_t time = 0; time < CrossPointSettings::SLEEP_REFRESH_TIME_COUNT; time++) {
+    SETTINGS.sleepRefreshTime = time;
+    ASSERT_TRUE(JsonSettingsIO::saveSettings(SETTINGS, SETTINGS_JSON));
+    SETTINGS.sleepRefreshTime = CrossPointSettings::SLEEP_REFRESH_OFF;
+    bool needsResave = false;
+    ASSERT_TRUE(
+        JsonSettingsIO::loadSettings(SETTINGS, LegacySettingsTestSupport::lastSavedJson().c_str(), &needsResave));
+    EXPECT_EQ(SETTINGS.sleepRefreshTime, time);
+  }
+  EXPECT_EQ(CrossPointSettings::SLEEP_REFRESH_TIME_COUNT, 5);
+
+  bool needsResave = false;
+  SETTINGS.sleepRefreshTime = CrossPointSettings::SLEEP_REFRESH_0600;
+  ASSERT_TRUE(
+      JsonSettingsIO::loadSettings(SETTINGS, R"({"statusBarChapterPageCount":1,"sleepScreen":11})", &needsResave));
+  EXPECT_EQ(SETTINGS.sleepRefreshTime, CrossPointSettings::SLEEP_REFRESH_0600);
+
+  // An out-of-range value is ignored and the current value stays.
+  ASSERT_TRUE(
+      JsonSettingsIO::loadSettings(SETTINGS, R"({"statusBarChapterPageCount":1,"sleepRefreshTime":9})", &needsResave));
+  EXPECT_EQ(SETTINGS.sleepRefreshTime, CrossPointSettings::SLEEP_REFRESH_0600);
+}
+
 TEST(SettingsJsonIntegration, PersistsAndClampsSleepImageTransform) {
   resetFakes();
   SETTINGS.sleepScreenImageZoom = 175;

@@ -74,7 +74,7 @@ void HalPowerManager::setPowerSaving(bool enabled) {
   xSemaphoreGive(modeMutex);
 }
 
-void HalPowerManager::startDeepSleep(HalGPIO&) const {
+void HalPowerManager::startDeepSleep(HalGPIO&, const uint32_t timerWakeSeconds) const {
   const auto& powerInput = BoardConfig::ACTIVE.input;
   const int pressedLevel = powerInput.powerActiveHigh ? HIGH : LOW;
   pinMode(powerInput.power, powerInput.powerActiveHigh ? INPUT_PULLDOWN : INPUT_PULLUP);
@@ -110,6 +110,10 @@ void HalPowerManager::startDeepSleep(HalGPIO&) const {
   // configuration
   esp_deep_sleep_enable_gpio_wakeup(1ULL << powerInput.power,
                                     powerInput.powerActiveHigh ? ESP_GPIO_WAKEUP_GPIO_HIGH : ESP_GPIO_WAKEUP_GPIO_LOW);
+  // On the X4 battery latch this timer cannot fire: the MCU is unpowered. It works on X3 and on X4 USB power.
+  if (timerWakeSeconds > 0) {
+    esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(timerWakeSeconds) * 1000000ULL);
+  }
   // Enter Deep Sleep
   esp_deep_sleep_start();
 }

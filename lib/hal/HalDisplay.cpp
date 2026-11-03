@@ -53,7 +53,7 @@ void HalDisplay::begin(bool seamless) {
   }
   // Request resync after specific wakeup events to ensure clean display state.
   if (wakeupReason == HalGPIO::WakeupReason::PowerButton || wakeupReason == HalGPIO::WakeupReason::AfterFlash ||
-      wakeupReason == HalGPIO::WakeupReason::Other) {
+      wakeupReason == HalGPIO::WakeupReason::Timer || wakeupReason == HalGPIO::WakeupReason::Other) {
     // The retained sleep frame can remain visible through parts of the first
     // X3 wake paint. One post-condition pass settles the newly displayed frame
     // before normal differential updates resume. Other controllers ignore the

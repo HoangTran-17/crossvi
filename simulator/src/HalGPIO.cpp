@@ -263,8 +263,12 @@ bool HalGPIO::consumeSimulatorSleepRequest() {
 }
 
 HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
-  if (SimulatorLifecycle::consumeWakeReason() == SimulatorLifecycle::WakeReason::PowerButton) {
+  const auto reason = SimulatorLifecycle::consumeWakeReason();
+  if (reason == SimulatorLifecycle::WakeReason::PowerButton) {
     return WakeupReason::PowerButton;
+  }
+  if (reason == SimulatorLifecycle::WakeReason::Timer) {
+    return WakeupReason::Timer;
   }
   return WakeupReason::Other;
 }

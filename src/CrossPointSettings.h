@@ -138,6 +138,14 @@ class CrossPointSettings {
     CALENDAR_LAYOUT_DAILY_REVIEW = 5,
     SLEEP_CALENDAR_LAYOUT_COUNT
   };
+  enum SLEEP_REFRESH_TIME {
+    SLEEP_REFRESH_OFF = 0,
+    SLEEP_REFRESH_0005 = 1,
+    SLEEP_REFRESH_0500 = 2,
+    SLEEP_REFRESH_0600 = 3,
+    SLEEP_REFRESH_0700 = 4,
+    SLEEP_REFRESH_TIME_COUNT
+  };
 
   // Status bar enum - legacy
   enum STATUS_BAR_MODE {
@@ -442,6 +450,8 @@ class CrossPointSettings {
   uint8_t sleepGhostingTreatment = SLEEP_GHOST_FAST_CLEAN_FULL;
   // Arrangement of the lunar calendar sleep screen.
   uint8_t sleepCalendarLayout = CALENDAR_LAYOUT_FULL;
+  // Daily timer wake that redraws the lunar calendar sleep screen.
+  uint8_t sleepRefreshTime = SLEEP_REFRESH_OFF;
   // Status bar settings (statusBar retained for migration only)
   uint8_t statusBar = FULL;
   uint8_t statusBarChapterPageCount = 1;

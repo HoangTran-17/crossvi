@@ -66,6 +66,11 @@ inline std::vector<StrId> sleepCalendarLayoutLabels() {
           StrId::STR_CALENDAR_LAYOUT_BRIEF,    StrId::STR_CALENDAR_LAYOUT_DAILY_REVIEW};
 }
 
+inline std::vector<StrId> sleepRefreshTimeLabels() {
+  return {StrId::STR_OFF, StrId::STR_SLEEP_REFRESH_0005, StrId::STR_SLEEP_REFRESH_0500, StrId::STR_SLEEP_REFRESH_0600,
+          StrId::STR_SLEEP_REFRESH_0700};
+}
+
 inline SettingInfo buildScreenMarginSetting() {
   SettingInfo setting;
   setting.nameId = StrId::STR_SCREEN_MARGIN;
@@ -295,6 +300,8 @@ const std::vector<SettingInfo>& getBaseSettingsList() {
                           "sleepScreenCoverFilter", StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_CALENDAR_LAYOUT, &CrossPointSettings::sleepCalendarLayout,
                           sleepCalendarLayoutLabels(), "sleepCalendarLayout", StrId::STR_CAT_DISPLAY),
+        SettingInfo::Enum(StrId::STR_SLEEP_REFRESH, &CrossPointSettings::sleepRefreshTime, sleepRefreshTimeLabels(),
+                          "sleepRefreshTime", StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_SLEEP_GHOSTING_TREATMENT, &CrossPointSettings::sleepGhostingTreatment,
                           sleepGhostingTreatmentLabels(), "sleepGhostingTreatment", StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(

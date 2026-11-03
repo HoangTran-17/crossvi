@@ -26,6 +26,9 @@ WakeReason consumeWakeReason() {
   if (std::strcmp(value, "power") == 0) {
     return WakeReason::PowerButton;
   }
+  if (std::strcmp(value, "timer") == 0) {
+    return WakeReason::Timer;
+  }
   return WakeReason::None;
 }
 

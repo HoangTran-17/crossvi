@@ -11,6 +11,8 @@ class SleepActivity final : public Activity {
       : Activity("Sleep", renderer, mappedInput) {}
   void onEnter() override;
   bool wakeFrameReplayable() const { return wakeFrameReplayable_; }
+  // Draws the lunar calendar screen directly, without the "entering sleep" popup.
+  void renderScheduledLunarRefresh() { renderLunarCalendarSleepScreen(); }
 
  private:
   void renderDefaultSleepScreen();

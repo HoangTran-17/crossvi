@@ -258,4 +258,17 @@ TEST_F(HalGPIOTest, DeepSleepGpioWakeIsPowerButtonEvenWhenX3ChargeCurrentIsZero)
 
   EXPECT_EQ(subject.getWakeupReason(), HalGPIO::WakeupReason::PowerButton);
 }
+
+TEST_F(HalGPIOTest, DeepSleepTimerWakeIsTimerRegardlessOfUsbState) {
+  HalGPIO subject;
+  PreferencesFake::cachedDevice = 2;
+  subject.begin();
+  EspFake::wakeupCause = ESP_SLEEP_WAKEUP_TIMER;
+  EspFake::resetReason = ESP_RST_DEEPSLEEP;
+
+  WireFake::currentMa = 25;
+  EXPECT_EQ(subject.getWakeupReason(), HalGPIO::WakeupReason::Timer);
+  WireFake::currentMa = -10;
+  EXPECT_EQ(subject.getWakeupReason(), HalGPIO::WakeupReason::Timer);
+}
 }  // namespace

@@ -401,6 +401,9 @@ HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
   // HalPowerManager arms only the physical power-button GPIO before deep
   // sleep.  Its wake cause is therefore authoritative; the X3 fuel gauge can
   // legitimately report 0 mA during the first boot samples.
+  if (wakeupCause == ESP_SLEEP_WAKEUP_TIMER && resetReason == ESP_RST_DEEPSLEEP) {
+    return WakeupReason::Timer;
+  }
   if ((wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON && !usbConnectedNow) ||
       (wakeupCause == ESP_SLEEP_WAKEUP_GPIO && resetReason == ESP_RST_DEEPSLEEP)) {
     return WakeupReason::PowerButton;

@@ -201,6 +201,8 @@ void SettingsSubmenuActivity::rebuildSettings() {
         if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::LUNAR_CALENDAR) {
           settings_.push_back(SettingInfo::Enum(StrId::STR_CALENDAR_LAYOUT, &CrossPointSettings::sleepCalendarLayout,
                                                 sleepCalendarLayoutLabels()));
+          settings_.push_back(SettingInfo::Enum(StrId::STR_SLEEP_REFRESH, &CrossPointSettings::sleepRefreshTime,
+                                                sleepRefreshTimeLabels()));
         }
       }
       break;

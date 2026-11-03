@@ -541,11 +541,13 @@
     const sleepScreenRow = document.getElementById('row-setting-sleepScreen');
     const coverFilterRow = document.getElementById('row-setting-sleepScreenCoverFilter');
     const calendarLayoutRow = document.getElementById('row-setting-sleepCalendarLayout');
+    const refreshTimeRow = document.getElementById('row-setting-sleepRefreshTime');
     if (sleepScreenRow) sleepScreenRow.style.display = quickResume ? 'none' : '';
     const showCoverFilter = !quickResume && (sleepScreen === 1 || sleepScreen === 5);
     if (coverFilterRow) coverFilterRow.style.display = showCoverFilter ? '' : 'none';
     const showCalendarLayout = !quickResume && sleepScreen === 7;
     if (calendarLayoutRow) calendarLayoutRow.style.display = showCalendarLayout ? '' : 'none';
+    if (refreshTimeRow) refreshTimeRow.style.display = showCalendarLayout ? '' : 'none';
 
     const paragraphAlignment = getControl('paragraphAlignment');
     if (paragraphAlignment && paragraphAlignment.options.length > 4) {
