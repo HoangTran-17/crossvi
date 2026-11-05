@@ -102,7 +102,7 @@ void appendNetLog(const char* stage, const std::string& url, esp_http_client_han
                            "%s up=%lu stage=%s host=%s err=%s tls_err=0x%x tls_code=-0x%x tls_flags=0x%x status=%d "
                            "heap_before=%u/%u heap_now=%u/%u minfree=%u rssi=%d ip=" IPSTR " dns=" IPSTR "\n",
                            when, millis(), stage, hostOf(url).c_str(), esp_err_to_name(err),
-                           static_cast<unsigned>(tlsErr), static_cast<unsigned>(-tlsCode),
+                           static_cast<unsigned>(tlsErr), static_cast<unsigned>(tlsCode),
                            static_cast<unsigned>(tlsFlags), status, before.free, before.maxAlloc, after.free,
                            after.maxAlloc, ESP.getMinFreeHeap(), rssi, IP2STR(&ip.ip), IP2STR(&dns.ip.u_addr.ip4));
   if (len <= 0) return;
@@ -225,7 +225,9 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
       return HttpDownloader::HTTP_ERROR;
     }
     if (esp_http_client_set_header(client, "User-Agent", userAgent.c_str()) != ESP_OK ||
-        (hasCredentials && esp_http_client_set_header(client, "Authorization", authorization.c_str()) != ESP_OK)) {
+        (hasCredentials && esp_http_client_set_header(client, "Authorization", authorization.c_str()) != ESP_OK) ||
+        (HttpTransportPolicy::isGithubContentsApiUrl(currentUrl) &&
+         esp_http_client_set_header(client, "Accept", "application/vnd.github.raw") != ESP_OK)) {
       LOG_ERR("HTTP", "Failed to set request headers");
       esp_http_client_cleanup(client);
       return HttpDownloader::HTTP_ERROR;

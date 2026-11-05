@@ -153,4 +153,16 @@ bool isGithubReleaseAssetRedirect(const std::string_view from, const std::string
          asciiEqualIgnoreCase(destination.host, "release-assets.githubusercontent.com") && destination.port == 443;
 }
 
+bool isGithubContentsApiUrl(const std::string_view url) {
+  Origin origin;
+  if (!parseOrigin(url, origin) || !asciiEqualIgnoreCase(origin.scheme, "https") ||
+      !asciiEqualIgnoreCase(origin.host, "api.github.com") || origin.port != 443) {
+    return false;
+  }
+  const size_t pathStart = url.find_first_of("/?#", url.find("://") + 3);
+  if (pathStart == std::string_view::npos) return false;
+  const std::string_view path = url.substr(pathStart, url.find_first_of("?#", pathStart) - pathStart);
+  return path.substr(0, 7) == "/repos/" && path.find("/contents/") != std::string_view::npos;
+}
+
 }  // namespace HttpTransportPolicy

@@ -1,6 +1,9 @@
 #include "SleepBriefFetch.h"
 
+#include <ArduinoJson.h>
 #include <HttpTransportPolicy.h>
+
+#include <cstring>
 
 #include "SleepBrief.h"
 #include "SleepRefreshSchedule.h"
@@ -54,6 +57,92 @@ ResolvedUrl resolveUrl(const char* text, const size_t length) {
   for (const char c : line) plain = plain && static_cast<unsigned char>(c) > ' ' && c != 0x7F;
   if (!plain || !HttpTransportPolicy::isHttpsUrl(line)) return {DEFAULT_URL, UrlSource::FileRejected};
   return {line, UrlSource::File};
+}
+
+std::string toFetchUrl(const std::string& url) {
+  constexpr char RAW_PREFIX[] = "https://gist.githubusercontent.com/";
+  constexpr size_t RAW_PREFIX_LEN = sizeof(RAW_PREFIX) - 1;
+  if (url.compare(0, RAW_PREFIX_LEN, RAW_PREFIX) != 0) return url;
+  const size_t userEnd = url.find('/', RAW_PREFIX_LEN);
+  if (userEnd == std::string::npos) return url;
+  const size_t idEnd = url.find('/', userEnd + 1);
+  if (idEnd == std::string::npos || url.compare(idEnd, 5, "/raw/") != 0) return url;
+  const std::string id = url.substr(userEnd + 1, idEnd - userEnd - 1);
+  if (id.empty() || id.find_first_not_of("0123456789abcdef") != std::string::npos) return url;
+  return "https://api.github.com/gists/" + id;
+}
+
+bool isGistApiUrl(const std::string& url) { return url.rfind("https://api.github.com/gists/", 0) == 0; }
+
+namespace {
+size_t skipSpace(const char* json, size_t i, const size_t length) {
+  while (i < length && (json[i] == ' ' || json[i] == '\n' || json[i] == '\r' || json[i] == '\t')) ++i;
+  return i;
+}
+}  // namespace
+
+JsonSpan gistFilesSpan(const char* json, const size_t length) {
+  constexpr char KEY[] = "\"files\"";
+  constexpr size_t KEY_LEN = sizeof(KEY) - 1;
+  JsonSpan span;
+  int depth = 0;
+  bool inString = false;
+  bool escaped = false;
+  for (size_t i = 0; i < length; ++i) {
+    const char c = json[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (c == '\\') {
+        escaped = true;
+      } else if (c == '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (c == '"') {
+      if (depth == 1 && span.begin == 0 && length - i >= KEY_LEN && std::memcmp(json + i, KEY, KEY_LEN) == 0) {
+        // Only a key is followed by ':'; the same text as a value is skipped like any other string.
+        size_t j = skipSpace(json, i + KEY_LEN, length);
+        if (j < length && json[j] == ':') {
+          j = skipSpace(json, j + 1, length);
+          if (j >= length) return span;
+          if (json[j] != '{') return {};
+          span.begin = j;
+          depth = 2;
+          i = j;
+          continue;
+        }
+      }
+      inString = true;
+    } else if (c == '{' || c == '[') {
+      ++depth;
+    } else if (c == '}' || c == ']') {
+      --depth;
+      if (span.begin != 0 && depth == 1) {
+        span.end = i + 1;
+        return span;
+      }
+    }
+  }
+  return span;
+}
+
+bool extractGistFile(const char* json, const size_t length, const char* name, std::string& out) {
+  const JsonSpan span = gistFilesSpan(json, length);
+  if (span.end == 0) return false;
+  JsonDocument filter;
+  filter[name]["content"] = true;
+  filter[name]["truncated"] = true;
+  JsonDocument doc;
+  if (deserializeJson(doc, json + span.begin, span.end - span.begin, DeserializationOption::Filter(filter))) {
+    return false;
+  }
+  const JsonVariantConst file = doc[name];
+  const char* content = file["content"];
+  if (!content || file["truncated"].as<bool>()) return false;
+  out = content;
+  return true;
 }
 
 std::string hostOf(const std::string& url) {

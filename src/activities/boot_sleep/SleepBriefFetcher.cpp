@@ -6,6 +6,7 @@
 #include <WiFi.h>
 
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -115,7 +116,10 @@ void runOnTimerWake(const uint8_t batteryPercent) {
   if (target.source == UrlSource::FileRejected) {
     LOG_ERR("SLW", "brief_url.txt is not a plain https URL, using the default");
   }
-  const std::string host = hostOf(target.url);
+  const std::string url = toFetchUrl(target.url);
+  const bool gist = isGistApiUrl(url);
+  const size_t capacity = gist ? MAX_GIST_RESPONSE_BYTES : sleep_brief::MAX_BRIEF_BYTES;
+  const std::string host = hostOf(url);
 
   if (!connectSavedWifi(WIFI_TIMEOUT_MS)) {
     wifiOff();
@@ -124,7 +128,7 @@ void runOnTimerWake(const uint8_t batteryPercent) {
     return;
   }
 
-  auto body = makeUniqueNoThrow<char[]>(sleep_brief::MAX_BRIEF_BYTES);
+  auto body = makeUniqueNoThrow<char[]>(capacity);
   if (!body) {
     wifiOff();
     LOG_ERR("SLW", "brief fetch fail reason=oom");
@@ -132,23 +136,37 @@ void runOnTimerWake(const uint8_t batteryPercent) {
   }
   size_t length = 0;
   bool overflow = false;
+  bool gistFilesComplete = false;
+  // A gist response is longer than `capacity` once its history grows, so only the callback caps what is kept.
+  const size_t maxBytes = gist ? std::numeric_limits<size_t>::max() : capacity;
   const HttpDownloader::DownloadError result = HttpDownloader::fetchBounded(
-      target.url, HTTP_TIMEOUT_MS, sleep_brief::MAX_BRIEF_BYTES, [&](const uint8_t* data, const size_t count) {
-        if (count > sleep_brief::MAX_BRIEF_BYTES - length) {
+      url, HTTP_TIMEOUT_MS, maxBytes, [&](const uint8_t* data, const size_t count) {
+        if (count > capacity - length) {
           overflow = true;
           return false;
         }
         std::memcpy(body.get() + length, data, count);
         length += count;
-        return true;
+        // The rest of a gist response is history that grows every day; stop reading once "files" is complete.
+        gistFilesComplete = gist && gistFilesSpan(body.get(), length).end != 0;
+        return !gistFilesComplete;
       });
   // Radio off before anything slow: SD writes and the e-paper refresh must not run with Wi-Fi powered.
   wifiOff();
 
-  if (result != HttpDownloader::OK) {
+  if (result != HttpDownloader::OK && !gistFilesComplete) {
     LOG_ERR("SLW", "brief fetch fail reason=%s host=%s bytes=%u ms=%lu", overflow ? "too_large" : "http", host.c_str(),
             static_cast<unsigned>(length), static_cast<unsigned long>(millis() - start));
     return;
+  }
+  if (gist) {
+    std::string content;
+    if (!extractGistFile(body.get(), length, GIST_FILE_NAME, content) || content.size() > capacity) {
+      LOG_ERR("SLW", "brief fetch fail reason=gist_file host=%s bytes=%u", host.c_str(), static_cast<unsigned>(length));
+      return;
+    }
+    std::memcpy(body.get(), content.data(), content.size());
+    length = content.size();
   }
   const Validation validation = validateBrief(body.get(), length);
   if (validation != Validation::Ok) {

@@ -11,6 +11,17 @@ TEST(HttpTransportPolicy, AcceptsOnlyBoundedHttpUrlsWithoutUserInfo) {
   EXPECT_FALSE(HttpTransportPolicy::isSupportedUrl(std::string(HttpTransportPolicy::MAX_URL_BYTES + 1, 'a')));
 }
 
+TEST(HttpTransportPolicy, RecognizesGithubContentsApi) {
+  EXPECT_TRUE(HttpTransportPolicy::isGithubContentsApiUrl(
+      "https://api.github.com/repos/HoangTran-17/x3-daily/contents/opds-api.xml?ref=device"));
+  EXPECT_TRUE(HttpTransportPolicy::isGithubContentsApiUrl("https://API.github.com/repos/o/r/contents/a/b.epub"));
+  EXPECT_FALSE(HttpTransportPolicy::isGithubContentsApiUrl("https://api.github.com/repos/o/r/releases/latest"));
+  EXPECT_FALSE(HttpTransportPolicy::isGithubContentsApiUrl("https://api.github.com/gists/abc?x=/repos/o/contents/"));
+  EXPECT_FALSE(HttpTransportPolicy::isGithubContentsApiUrl("http://api.github.com/repos/o/r/contents/a"));
+  EXPECT_FALSE(HttpTransportPolicy::isGithubContentsApiUrl("https://api.github.com.evil.example/repos/o/r/contents/a"));
+  EXPECT_FALSE(HttpTransportPolicy::isGithubContentsApiUrl("https://api.github.com"));
+}
+
 TEST(HttpTransportPolicy, RecognizesHttpsForOta) {
   EXPECT_TRUE(HttpTransportPolicy::isHttpsUrl("https://github.com/tvhdc/crossvi/releases/download/v1/firmware.bin"));
   EXPECT_FALSE(HttpTransportPolicy::isHttpsUrl("http://github.com/tvhdc/crossvi/firmware.bin"));
