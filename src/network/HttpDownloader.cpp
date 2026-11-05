@@ -7,12 +7,16 @@
 #include <base64.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
+#include <esp_netif.h>
+#include <esp_wifi.h>
 #include <mbedtls/sha256.h>
 #include <strings.h>
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <functional>
 #include <limits>
 #include <string>
@@ -49,6 +53,71 @@ struct Sink {
 // Time left before the sink's wall-clock deadline: INT32_MAX without one, <= 0 once it has passed.
 int32_t remainingMs(const Sink& sink) {
   return sink.hasDeadline ? static_cast<int32_t>(sink.deadlineMs - millis()) : std::numeric_limits<int32_t>::max();
+}
+
+// X3 units have no USB data line, so a failed request is recorded on the SD card where the user can read it.
+constexpr char NET_LOG_PATH[] = "/.crosspoint/net_log.txt";
+constexpr size_t NET_LOG_MAX_BYTES = 16 * 1024;
+
+struct HeapSample {
+  uint32_t free = 0;
+  uint32_t maxAlloc = 0;
+};
+
+HeapSample sampleHeap() { return {ESP.getFreeHeap(), ESP.getMaxAllocHeap()}; }
+
+// Host only: unattended callers may use a URL whose path carries a secret.
+std::string hostOf(const std::string& url) {
+  const size_t schemeEnd = url.find("://");
+  const size_t start = schemeEnd == std::string::npos ? 0 : schemeEnd + 3;
+  const size_t end = url.find_first_of("/?#", start);
+  std::string host = url.substr(start, end == std::string::npos ? std::string::npos : end - start);
+  const size_t at = host.rfind('@');
+  return at == std::string::npos ? host : host.substr(at + 1);
+}
+
+void appendNetLog(const char* stage, const std::string& url, esp_http_client_handle_t client, const esp_err_t err,
+                  const int status, const HeapSample& before) {
+  int tlsCode = 0;
+  int tlsFlags = 0;
+  const esp_err_t tlsErr = client ? esp_http_client_get_and_clear_last_tls_error(client, &tlsCode, &tlsFlags) : ESP_OK;
+
+  char when[24] = "no-clock";
+  const time_t now = time(nullptr);
+  tm local{};
+  if (now > 1600000000 && localtime_r(&now, &local)) strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", &local);
+
+  wifi_ap_record_t ap{};
+  const int rssi = esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
+  esp_netif_ip_info_t ip{};
+  esp_netif_dns_info_t dns{};
+  if (esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF")) {
+    esp_netif_get_ip_info(sta, &ip);
+    esp_netif_get_dns_info(sta, ESP_NETIF_DNS_MAIN, &dns);
+  }
+
+  const HeapSample after = sampleHeap();
+  char line[320];
+  const int len = snprintf(line, sizeof(line),
+                           "%s up=%lu stage=%s host=%s err=%s tls_err=0x%x tls_code=-0x%x tls_flags=0x%x status=%d "
+                           "heap_before=%u/%u heap_now=%u/%u minfree=%u rssi=%d ip=" IPSTR " dns=" IPSTR "\n",
+                           when, millis(), stage, hostOf(url).c_str(), esp_err_to_name(err),
+                           static_cast<unsigned>(tlsErr), static_cast<unsigned>(-tlsCode),
+                           static_cast<unsigned>(tlsFlags), status, before.free, before.maxAlloc, after.free,
+                           after.maxAlloc, ESP.getMinFreeHeap(), rssi, IP2STR(&ip.ip), IP2STR(&dns.ip.u_addr.ip4));
+  if (len <= 0) return;
+  LOG_ERR("HTTP", "%s", line);
+
+  HalFile file = Storage.open(NET_LOG_PATH, O_WRONLY | O_CREAT | O_APPEND);
+  if (!file) return;
+  if (file.fileSize() > NET_LOG_MAX_BYTES) {
+    file.close();
+    Storage.remove(NET_LOG_PATH);
+    file = Storage.open(NET_LOG_PATH, O_WRONLY | O_CREAT | O_APPEND);
+    if (!file) return;
+  }
+  file.write(line, std::min<size_t>(len, sizeof(line) - 1));
+  file.close();
 }
 
 bool isRedirect(const int status) {
@@ -106,6 +175,7 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
   const bool hasCredentials = !username.empty() || !password.empty();
   if (!HttpTransportPolicy::isSupportedUrl(url) || (hasCredentials && !HttpTransportPolicy::credentialsAllowed(url))) {
     LOG_ERR("HTTP", "Rejected URL or credential transport policy");
+    appendNetLog("policy", url, nullptr, ESP_OK, 0, sampleHeap());
     return HttpDownloader::HTTP_ERROR;
   }
 
@@ -161,9 +231,11 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
       return HttpDownloader::HTTP_ERROR;
     }
 
+    const HeapSample beforeOpen = sampleHeap();
     const esp_err_t err = esp_http_client_open(client, 0);
     if (err != ESP_OK) {
       LOG_ERR("HTTP", "%s open failed: %s", hop == 0 ? "initial" : "redirect", esp_err_to_name(err));
+      appendNetLog(hop == 0 ? "open" : "redirect_open", currentUrl, client, err, 0, beforeOpen);
       esp_http_client_cleanup(client);
       return HttpDownloader::HTTP_ERROR;
     }
@@ -210,6 +282,7 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
     LOG_ERR("HTTP", "unexpected status: %d, headers=%lld, errno=%d, free=%u, maxalloc=%u", status,
             static_cast<long long>(contentLength), esp_http_client_get_errno(client), ESP.getFreeHeap(),
             ESP.getMaxAllocHeap());
+    appendNetLog("status", currentUrl, client, ESP_OK, status, sampleHeap());
     esp_http_client_cleanup(client);
     return HttpDownloader::HTTP_ERROR;
   }
@@ -245,6 +318,7 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
     const int read = esp_http_client_read(client, buf.get(), READ_CHUNK);
     if (read < 0) {
       LOG_ERR("HTTP", "read error after %zu bytes", sink.downloaded);
+      appendNetLog("read", currentUrl, client, ESP_FAIL, status, sampleHeap());
       esp_http_client_cleanup(client);
       return HttpDownloader::HTTP_ERROR;
     }

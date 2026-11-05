@@ -10,3 +10,9 @@ enum wifi_ps_type_t {
 
 inline esp_err_t esp_wifi_set_ps(wifi_ps_type_t) { return ESP_OK; }
 inline esp_err_t esp_wifi_stop() { return ESP_OK; }
+
+struct wifi_ap_record_t {
+  int8_t rssi = 0;
+};
+
+inline esp_err_t esp_wifi_sta_get_ap_info(wifi_ap_record_t*) { return ESP_FAIL; }
